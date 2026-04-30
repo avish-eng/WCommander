@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - (P0 #1) Up/Down/PgUp/PgDn/Home/End now move the cursor in file panes. `PaneView` was accepting focus on the container instead of routing it to the inner `QTreeWidget`, so arrow keys hit the QFrame default and never reached the list. Fixed by setting `setFocusProxy(self.file_list)`.
 - F5 now emits `"copy"` (TC convention) instead of `"refresh"`. `PaneView.keyPressEvent` was checking `QKeySequence.StandardKey.Refresh` before the explicit F5 branch, and Qt maps `StandardKey.Refresh` to F5 on several platforms (collision). Removed the `StandardKey.Refresh` check; explicit Ctrl+R still triggers refresh.
+- Pane activation now reliably routes focus to the file list. `_set_active_pane` flipped the visual highlight but left focus wherever the activating event landed (chrome button, breadcrumb, etc.), so arrows / Enter / Space did nothing until the user clicked into the list. Now whenever a pane becomes active, focus lands on `file_list` — except when the user is mid-keystroke in the quick-filter bar, which is left alone.
 - (P0 #2) Enter on a file now launches it via the OS default association (`QDesktopServices.openUrl`). Previously `_activate_item` was a no-op for files — only directories descended. Behaviour for directories and the `..` row is unchanged.
 
 ### Added

@@ -470,8 +470,16 @@ class MainWindow(QMainWindow):
         self.context.state.layout.active_pane_index = index
         for pane_index, pane_view in enumerate(self.pane_views):
             pane_view.set_active(pane_index == index)
-        self._sync_terminal_to_pane_directory(self._active_pane(), self._active_pane().current_directory())
-        self._sync_quick_view(self._active_pane())
+        new_active = self._active_pane()
+        # Route focus to the file list whenever a pane becomes active so
+        # arrows / Enter / Space drive the cursor immediately. Skip if the
+        # user is typing in the quick-filter bar (we don't want to steal
+        # focus mid-keystroke) or if focus already sits on the file list.
+        focused = QApplication.focusWidget()
+        if focused is not new_active._quick_filter_bar and focused is not new_active.file_list:
+            new_active.focus_list()
+        self._sync_terminal_to_pane_directory(new_active, new_active.current_directory())
+        self._sync_quick_view(new_active)
 
     def _sync_terminal_to_pane_directory(self, pane_view: PaneView, path: Path) -> None:
         if pane_view is not self._active_pane():

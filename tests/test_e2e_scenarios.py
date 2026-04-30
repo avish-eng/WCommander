@@ -144,6 +144,76 @@ def test_e2e_tab_cycles_between_panes(tmp_path: Path) -> None:
     _close_window(window)
 
 
+def test_e2e_pane_click_focuses_file_list_so_arrows_work(tmp_path: Path) -> None:
+    """Clicking into a pane (or any code path that flips active_pane_index)
+    must leave focus on that pane's file_list — not on a chrome button or
+    the pane container — so arrows / Enter / Space drive the cursor
+    without an extra click on the list itself."""
+    left, right = _setup_split(tmp_path)
+    (right / "x.txt").write_text("x")
+    (right / "y.txt").write_text("y")
+    window = _make_main_window(left, right)
+    # Simulate "user activated the right pane" via the same code path the
+    # pane's mouse / focus handlers use — this is what was leaving focus
+    # on the wrong widget before the fix.
+    window._on_pane_activated(window.pane_views[1])
+
+    focused = QApplication.focusWidget()
+    assert focused is window.pane_views[1].file_list, (
+        f"after pane activation, focus should be on file_list; got {focused}"
+    )
+    _close_window(window)
+
+
+def test_e2e_pane_activation_does_not_steal_quick_filter_focus(tmp_path: Path) -> None:
+    """If the user is typing in the quick-filter bar, activating the pane
+    must not yank focus back to the file list."""
+    left, right = _setup_split(tmp_path)
+    (left / "alpha.txt").write_text("a")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.show_quick_filter()
+    assert QApplication.focusWidget() is pane._quick_filter_bar
+
+    # Re-activate the pane (e.g. via clicking a chrome button); focus must
+    # stay in the filter input.
+    window._on_pane_activated(pane)
+
+    assert QApplication.focusWidget() is pane._quick_filter_bar
+    _close_window(window)
+
+
+def test_e2e_tab_lands_focus_on_file_list_so_arrows_work(tmp_path: Path) -> None:
+    """Tab should switch to the other pane AND leave focus on the new
+    pane's file list, so arrow keys and Enter work without an extra
+    mouse click. This is the user-reported flow."""
+    left, right = _setup_split(tmp_path)
+    (right / "alpha.txt").write_text("a")
+    (right / "beta.txt").write_text("b")
+    (right / "gamma.txt").write_text("c")
+    window = _make_main_window(left, right)
+    initial_active = window.context.state.layout.active_pane_index
+    assert initial_active == 0  # left
+
+    # Tab to right pane.
+    QTest.keyClick(window, Qt.Key.Key_Tab)
+    assert window.context.state.layout.active_pane_index == 1
+    right_pane = window.pane_views[1]
+    # Focus should be inside the right pane (proxied to its file_list).
+    focused = QApplication.focusWidget()
+    assert focused is right_pane.file_list, (
+        f"after Tab, focus should be on right pane's file_list; got {focused}"
+    )
+
+    # Now Down should move the cursor inside the right pane.
+    starting_path = right_pane.file_list.currentItem().data(0, Qt.ItemDataRole.UserRole)
+    QTest.keyClick(right_pane.file_list, Qt.Key.Key_Down)
+    after_path = right_pane.file_list.currentItem().data(0, Qt.ItemDataRole.UserRole)
+    assert after_path != starting_path, "Down should advance the cursor"
+
+    _close_window(window)
+
+
 def test_e2e_type_to_jump_moves_cursor_to_first_match(tmp_path: Path) -> None:
     left, right = _setup_split(tmp_path)
     (left / "alpha.txt").write_text("a")
