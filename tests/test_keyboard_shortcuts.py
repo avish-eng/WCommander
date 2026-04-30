@@ -22,7 +22,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QKeySequence
 from PySide6.QtWidgets import QApplication
 
 from multipane_commander.services.bookmarks import BookmarkStore
@@ -240,6 +240,51 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Feature tests — new bindings added in this PR.
 # ---------------------------------------------------------------------------
+
+
+def test_F0_3_f_keys_fire_with_qlineedit_focused() -> None:
+    """SPEC §16 spike-3: F-keys must fire when path field or terminal has focus.
+
+    The path bar uses a QLineEdit-style widget and the terminal surface is a
+    QPlainTextEdit. Neither widget class consumes F-key events, so Qt's
+    standard QShortcut(WindowShortcut) wiring already routes F-keys to the
+    MainWindow handler. This test locks that behaviour in place; if a future
+    refactor switches the terminal to QWebEngineView (which DOES consume keys),
+    this test will fail and a global event filter or ApplicationShortcut
+    context will need to be installed.
+    """
+    from PySide6.QtGui import QShortcut
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QLineEdit, QMainWindow, QPlainTextEdit
+
+    app = _qapp()
+    window = QMainWindow()
+    fired: list[str] = []
+    QShortcut(QKeySequence("F5"), window, activated=lambda: fired.append("F5"))
+    QShortcut(QKeySequence("F8"), window, activated=lambda: fired.append("F8"))
+
+    line_edit = QLineEdit()
+    window.setCentralWidget(line_edit)
+    window.show()
+    line_edit.setFocus()
+    app.processEvents()
+
+    QTest.keyClick(line_edit, Qt.Key.Key_F5)
+    QTest.keyClick(line_edit, Qt.Key.Key_F8)
+    app.processEvents()
+    assert fired == ["F5", "F8"], f"F-keys should fire with QLineEdit focused; got {fired}"
+
+    fired.clear()
+    text_edit = QPlainTextEdit()
+    window.setCentralWidget(text_edit)
+    text_edit.setFocus()
+    app.processEvents()
+
+    QTest.keyClick(text_edit, Qt.Key.Key_F5)
+    app.processEvents()
+    assert fired == ["F5"], f"F5 should fire with QPlainTextEdit focused; got {fired}"
+
+    window.close()
 
 
 def test_F0_2_enter_on_file_launches_via_desktop_services(tmp_path: Path, monkeypatch) -> None:

@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - F5 now emits `"copy"` (TC convention) instead of `"refresh"`. `PaneView.keyPressEvent` was checking `QKeySequence.StandardKey.Refresh` before the explicit F5 branch, and Qt maps `StandardKey.Refresh` to F5 on several platforms (collision). Removed the `StandardKey.Refresh` check; explicit Ctrl+R still triggers refresh.
 - (P0 #2) Enter on a file now launches it via the OS default association (`QDesktopServices.openUrl`). Previously `_activate_item` was a no-op for files — only directories descended. Behaviour for directories and the `..` row is unchanged.
 
+### Verified
+
+- (P0 #3) SPEC §16 spike-3 ("F-keys fire while a path field or the terminal has focus") is met by the existing `QShortcut` + `WindowShortcut` setup. Empirically confirmed: `QLineEdit` and `QPlainTextEdit` (the widget classes used by the breadcrumb path bar and terminal surface) do not consume F-key events, so Qt's shortcut system routes them to the `MainWindow` handler regardless of which child holds focus. Locked in `test_F0_3_f_keys_fire_with_qlineedit_focused`. **Caveat:** if the terminal is migrated to `QWebEngineView` per SPEC §8.1, web views consume keys aggressively and a global event filter or `ApplicationShortcut` context will be required at that point.
+
 ### Tests
 
 - Added `tests/test_keyboard_shortcuts.py` — regression suite (R1–R13) covering F2 / Shift+F6 rename, F5/F6/F7/F8/Delete operations, Backspace navigation, Insert/Space selection toggle (with TC-style cursor advance), Esc clear-marks, Ctrl+A mark-all, Ctrl+R refresh, Enter on directory / parent row.
