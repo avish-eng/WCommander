@@ -756,7 +756,9 @@ class PaneView(QFrame):
             self.operation_requested.emit("rename")
             event.accept()
             return
-        if event.matches(QKeySequence.StandardKey.Refresh) or (
+        # Don't use QKeySequence.StandardKey.Refresh — Qt maps it to F5 on
+        # several platforms, which collides with TC's F5 = Copy below.
+        if (
             event.key() == Qt.Key.Key_R
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):

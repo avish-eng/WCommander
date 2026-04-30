@@ -117,12 +117,13 @@ def test_R1_shift_f6_emits_rename(tmp_path: Path) -> None:
     assert captured == ["rename"]
 
 
-def test_R2_f6_f7_f8_delete_emit_operations(tmp_path: Path) -> None:
+def test_R2_f5_f6_f7_f8_delete_emit_operations(tmp_path: Path) -> None:
     pane = _make_pane(tmp_path)
     _populate_dir(tmp_path)
     pane.refresh()
 
     cases: list[tuple[Qt.Key, str, Qt.KeyboardModifier]] = [
+        (Qt.Key.Key_F5, "copy", Qt.KeyboardModifier.NoModifier),
         (Qt.Key.Key_F6, "move", Qt.KeyboardModifier.NoModifier),
         (Qt.Key.Key_F7, "mkdir", Qt.KeyboardModifier.NoModifier),
         (Qt.Key.Key_F8, "delete", Qt.KeyboardModifier.NoModifier),
@@ -134,30 +135,6 @@ def test_R2_f6_f7_f8_delete_emit_operations(tmp_path: Path) -> None:
         pane.keyPressEvent(_key_event(key, mods))
         pane.operation_requested.disconnect(handler)
         assert captured == [expected], f"{key} should emit {expected}, got {captured}"
-
-
-def test_R2_known_quirk_f5_routes_to_refresh_via_standardkey(tmp_path: Path) -> None:
-    """On platforms where ``QKeySequence.StandardKey.Refresh`` includes F5
-    (e.g. Windows, and apparently macOS Qt builds), the Refresh branch in
-    ``PaneView.keyPressEvent`` runs before the explicit F5-Copy branch and
-    swallows the event. This is a P0 bug to fix later (TC convention is
-    F5 = Copy), but until then this test locks the current behaviour so
-    we notice if it changes accidentally.
-    """
-    pane = _make_pane(tmp_path)
-    _populate_dir(tmp_path)
-    pane.refresh()
-    captured: list[str] = []
-    pane.operation_requested.connect(captured.append)
-
-    pane.keyPressEvent(_key_event(Qt.Key.Key_F5))
-
-    # When this assertion flips to ["copy"], remove this test and add F5 to
-    # the regular R2 case list above.
-    assert captured == ["refresh"], (
-        f"F5 routing changed; current emit: {captured}. "
-        "If F5 now emits 'copy', delete this test and add F5 to test_R2_*."
-    )
 
 
 def test_R3_backspace_navigates_to_parent(tmp_path: Path) -> None:

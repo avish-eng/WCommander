@@ -10,11 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - (P0 #1) Up/Down/PgUp/PgDn/Home/End now move the cursor in file panes. `PaneView` was accepting focus on the container instead of routing it to the inner `QTreeWidget`, so arrow keys hit the QFrame default and never reached the list. Fixed by setting `setFocusProxy(self.file_list)`.
+- F5 now emits `"copy"` (TC convention) instead of `"refresh"`. `PaneView.keyPressEvent` was checking `QKeySequence.StandardKey.Refresh` before the explicit F5 branch, and Qt maps `StandardKey.Refresh` to F5 on several platforms (collision). Removed the `StandardKey.Refresh` check; explicit Ctrl+R still triggers refresh.
 
 ### Tests
 
-- Added `tests/test_keyboard_shortcuts.py` — regression suite (R1–R13) covering F2 / Shift+F6 rename, F6/F7/F8/Delete operations, Backspace navigation, Insert/Space selection toggle (with TC-style cursor advance), Esc clear-marks, Ctrl+A mark-all, Ctrl+R refresh, Enter on directory / parent row.
-
-### Notes
-
-- Regression suite surfaced a P0 bug: **F5 currently emits `"refresh"` instead of `"copy"`** because `QKeySequence.StandardKey.Refresh` matches F5 and the Refresh branch runs first in `PaneView.keyPressEvent`. Locked as a known-quirk test (`test_R2_known_quirk_f5_routes_to_refresh_via_standardkey`) until fixed.
+- Added `tests/test_keyboard_shortcuts.py` — regression suite (R1–R13) covering F2 / Shift+F6 rename, F5/F6/F7/F8/Delete operations, Backspace navigation, Insert/Space selection toggle (with TC-style cursor advance), Esc clear-marks, Ctrl+A mark-all, Ctrl+R refresh, Enter on directory / parent row.
