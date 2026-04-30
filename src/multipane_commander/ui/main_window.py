@@ -41,6 +41,7 @@ from multipane_commander.ui.themes import (
     builtin_themes,
     resolve_theme_definition,
 )
+from multipane_commander.ui.find_files_dialog import FindFilesDialog
 from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_renames
 from multipane_commander.ui.transfer_dialog import TransferDialog
 
@@ -294,6 +295,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_last_operation)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_last_operation)
         QShortcut(QKeySequence("Ctrl+M"), self, activated=self._multi_rename_in_active_pane)
+        QShortcut(QKeySequence("Alt+F7"), self, activated=self._find_files_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1321,6 +1323,23 @@ class MainWindow(QMainWindow):
             return
         self._set_active_pane(best_index)
         self.pane_views[best_index].focus_list()
+
+    def _find_files_in_active_pane(self) -> None:
+        pane = self._active_pane()
+        root = pane.active_tab.path
+        dialog = FindFilesDialog(
+            root,
+            parent=self,
+            on_open=self._open_search_result,
+        )
+        dialog.exec()
+
+    def _open_search_result(self, path: Path) -> None:
+        if not path.exists():
+            return
+        target_dir = path.parent if path.is_file() else path
+        pane = self._active_pane()
+        pane.navigate_to(target_dir)
 
     def _multi_rename_in_active_pane(self) -> None:
         pane = self._active_pane()

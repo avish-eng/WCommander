@@ -242,6 +242,61 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_10_find_files_matches_name_glob(tmp_path: Path) -> None:
+    from multipane_commander.ui.find_files_dialog import find_files
+
+    (tmp_path / "alpha.txt").write_text("a")
+    (tmp_path / "beta.txt").write_text("b")
+    (tmp_path / "alpha.md").write_text("c")
+    sub = tmp_path / "nested"
+    sub.mkdir()
+    (sub / "alpha.log").write_text("d")
+
+    results = find_files(tmp_path, name_pattern="alpha.*", content_query="")
+    paths = {r.path.name for r in results}
+    assert paths == {"alpha.txt", "alpha.md", "alpha.log"}
+
+
+def test_F1_10_find_files_filters_by_content(tmp_path: Path) -> None:
+    from multipane_commander.ui.find_files_dialog import find_files
+
+    (tmp_path / "a.txt").write_text("hello world")
+    (tmp_path / "b.txt").write_text("nothing matching")
+    (tmp_path / "c.txt").write_text("HELLO again")
+
+    results = find_files(tmp_path, name_pattern="*.txt", content_query="hello")
+    paths = {r.path.name for r in results}
+
+    assert paths == {"a.txt", "c.txt"}  # case-insensitive
+    assert all(r.matched_content for r in results)
+
+
+def test_F1_10_find_files_skips_binary(tmp_path: Path) -> None:
+    from multipane_commander.ui.find_files_dialog import find_files
+
+    (tmp_path / "real.txt").write_text("hello there")
+    (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x02hello\x00\x03")
+
+    results = find_files(tmp_path, name_pattern="*", content_query="hello")
+    paths = {r.path.name for r in results}
+
+    assert paths == {"real.txt"}
+
+
+def test_F1_10_find_files_non_recursive_stops_at_root(tmp_path: Path) -> None:
+    from multipane_commander.ui.find_files_dialog import find_files
+
+    (tmp_path / "top.txt").write_text("x")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "deep.txt").write_text("x")
+
+    results = find_files(tmp_path, name_pattern="*.txt", content_query="", recursive=False)
+    paths = {r.path.name for r in results}
+
+    assert paths == {"top.txt"}
+
+
 def test_F1_9_template_renders_name_ext_counter() -> None:
     from multipane_commander.ui.multi_rename_dialog import render_template
 
