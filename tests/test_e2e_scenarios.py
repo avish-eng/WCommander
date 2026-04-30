@@ -1,0 +1,359 @@
+"""End-to-end scenario tests (Layer A: offscreen MainWindow + QTest).
+
+Each test builds a real ``MainWindow`` over a synthetic ``AppContext``
+rooted at ``tmp_path``, drives it via ``QTest.keyClick`` and direct
+method calls, then asserts on file-system state and widget state.
+
+These complement ``test_keyboard_shortcuts.py`` (which exercises pieces
+in isolation) by walking realistic workflows through the full
+shortcut → handler → service chain.
+
+Background-job operations (copy/move/delete) run on a ``QThread``;
+``_wait_for_jobs`` polls ``QApplication.processEvents`` until the
+``JobManager._active_threads`` list drains.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtGui import QKeySequence
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from multipane_commander.bootstrap import AppContext
+from multipane_commander.config.model import AppConfig
+from multipane_commander.state.model import AppState, LayoutState, PaneState, TabState, WindowState
+from multipane_commander.ui.main_window import MainWindow
+
+
+_APP: QApplication | None = None
+
+
+def _qapp() -> QApplication:
+    global _APP
+    existing = QApplication.instance()
+    if isinstance(existing, QApplication):
+        _APP = existing
+    if _APP is None:
+        _APP = QApplication([])
+    return _APP
+
+
+def _make_main_window(left_dir: Path, right_dir: Path) -> MainWindow:
+    _qapp()
+    state = AppState(
+        panes=[
+            PaneState(title="Left", tabs=[TabState(title=left_dir.name or "left", path=left_dir)]),
+            PaneState(title="Right", tabs=[TabState(title=right_dir.name or "right", path=right_dir)]),
+        ],
+        bookmarks=[],
+        layout=LayoutState(active_pane_index=0, layout_mode="stacked"),
+        window=WindowState(width=1280, height=860, is_maximized=False),
+    )
+    config = AppConfig()
+    config.show_terminal = False  # keep the terminal collapsed for predictability
+    window = MainWindow(context=AppContext(config=config, state=state))
+    window.show()
+    QApplication.processEvents()
+    return window
+
+
+def _close_window(window: MainWindow) -> None:
+    """Close the window and kill the terminal-dock subprocess hard so we
+    don't leak a zsh per test (and don't pay 2s per test waiting for a
+    graceful shell exit)."""
+    try:
+        backend = window.terminal_dock.session
+        proc = getattr(backend, "process", None)
+        if proc is not None:
+            proc.kill()
+            proc.waitForFinished(500)
+    except Exception:
+        pass
+    window.close()
+    QApplication.processEvents()
+
+
+def _wait_for_jobs(window: MainWindow, *, timeout_ms: int = 5000) -> None:
+    deadline = time.monotonic() + timeout_ms / 1000
+    app = _qapp()
+    while window.job_manager._active_threads and time.monotonic() < deadline:
+        app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+    # Drain any trailing signals (refresh, persist).
+    for _ in range(10):
+        app.processEvents()
+
+
+def _setup_split(tmp_path: Path) -> tuple[Path, Path]:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    return left, right
+
+
+def _row_for_path(pane, path: Path):
+    for row in range(pane.file_list.topLevelItemCount()):
+        item = pane.file_list.topLevelItem(row)
+        if item.data(0, Qt.ItemDataRole.UserRole) == path:
+            return item
+    raise AssertionError(f"path {path} not found in pane {pane.active_tab.path}")
+
+
+# ---------------------------------------------------------------------------
+# Scenarios
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_arrow_keys_move_cursor_in_active_pane(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    (left / "alpha.txt").write_text("a")
+    (left / "beta.txt").write_text("b")
+    (left / "gamma.txt").write_text("c")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
+
+    QTest.keyClick(pane.file_list, Qt.Key.Key_Down)
+    QTest.keyClick(pane.file_list, Qt.Key.Key_Down)
+
+    cursor_path = pane.file_list.currentItem().data(0, Qt.ItemDataRole.UserRole)
+    assert isinstance(cursor_path, Path)
+    assert cursor_path.name in {"alpha.txt", "beta.txt", "gamma.txt"}
+    _close_window(window)
+
+
+def test_e2e_tab_cycles_between_panes(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    (left / "x.txt").write_text("x")
+    (right / "y.txt").write_text("y")
+    window = _make_main_window(left, right)
+    initial_active = window.context.state.layout.active_pane_index
+
+    QTest.keyClick(window, Qt.Key.Key_Tab)
+
+    new_active = window.context.state.layout.active_pane_index
+    assert new_active != initial_active
+    _close_window(window)
+
+
+def test_e2e_type_to_jump_moves_cursor_to_first_match(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    (left / "alpha.txt").write_text("a")
+    (left / "beta.txt").write_text("b")
+    (left / "boris.txt").write_text("c")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
+
+    QTest.keyClick(pane.file_list, Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier)
+
+    cursor_path = pane.file_list.currentItem().data(0, Qt.ItemDataRole.UserRole)
+    assert isinstance(cursor_path, Path)
+    assert cursor_path.name.startswith("b"), f"expected b*, got {cursor_path.name}"
+    _close_window(window)
+
+
+def test_e2e_ctrl_s_reveals_filter_bar(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    (left / "alpha.txt").write_text("x")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    assert pane._quick_filter_bar.isVisible() is False
+
+    QTest.keyClick(window, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+
+    assert pane._quick_filter_bar.isVisible() is True
+    _close_window(window)
+
+
+def test_e2e_alt_f1_opens_drive_menu_for_active_pane(tmp_path: Path, monkeypatch) -> None:
+    """We can't easily click into a popped QMenu, so we monkeypatch
+    ``_show_drive_menu`` to capture which pane it would have targeted."""
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    captured: list = []
+    monkeypatch.setattr(MainWindow, "_show_drive_menu", lambda self, pane: captured.append(pane))
+
+    QTest.keyClick(window, Qt.Key.Key_F1, Qt.KeyboardModifier.AltModifier)
+
+    assert captured == [window.pane_views[0]]
+    _close_window(window)
+
+
+def test_e2e_f2_renames_file_and_ctrl_z_reverts(tmp_path: Path, monkeypatch) -> None:
+    left, right = _setup_split(tmp_path)
+    src = left / "old.txt"
+    src.write_text("hello")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.file_list.setCurrentItem(_row_for_path(pane, src))
+
+    # F2 opens TextEntryDialog modal; monkeypatch to auto-accept with new name.
+    from multipane_commander.ui import dialogs as dialogs_mod
+
+    class FakeDialog:
+        DialogCode = type("DC", (), {"Accepted": 1})
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._value = "new.txt"
+
+        def exec(self) -> int:
+            return self.DialogCode.Accepted
+
+        def value(self) -> str:
+            return self._value
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.TextEntryDialog", FakeDialog)
+
+    window._rename_in_active_pane()
+    assert (left / "new.txt").exists()
+    assert not (left / "old.txt").exists()
+    assert len(window.undo_stack) == 1
+
+    window._undo_last_operation()
+    assert (left / "old.txt").exists()
+    assert not (left / "new.txt").exists()
+    assert len(window.undo_stack) == 0
+    _close_window(window)
+
+
+def test_e2e_f5_copies_marked_file_to_passive_pane(tmp_path: Path, monkeypatch) -> None:
+    left, right = _setup_split(tmp_path)
+    src = left / "thing.txt"
+    src.write_text("content-to-copy")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.marked_paths = {src}
+
+    # The transfer dialog is modal — short-circuit it to "accepted" with no overrides.
+    from multipane_commander.ui import transfer_dialog as td_mod
+
+    class FakeTransferDialog:
+        DialogCode = type("DC", (), {"Accepted": 1, "Rejected": 0})
+
+        def __init__(self, *_args, **kwargs) -> None:
+            self._sources = kwargs.get("source_paths") or []
+            self._destination = kwargs.get("default_destination")
+
+        def exec(self) -> int:
+            return self.DialogCode.Accepted
+
+        def destination_directory(self):
+            return self._destination
+
+        def conflict_policy(self) -> str:
+            return "overwrite"
+
+        def selected_actions(self):
+            return self._sources
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.TransferDialog", FakeTransferDialog)
+
+    window._copy_from_active_pane()
+    _wait_for_jobs(window)
+
+    assert (right / "thing.txt").exists()
+    assert (right / "thing.txt").read_text() == "content-to-copy"
+    assert (left / "thing.txt").exists()  # source preserved on copy
+    _close_window(window)
+
+
+def test_e2e_shift_f8_permanent_delete_unlinks_file(tmp_path: Path, monkeypatch) -> None:
+    left, right = _setup_split(tmp_path)
+    target = left / "doomed.txt"
+    target.write_text("x")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.marked_paths = {target}
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.ask_confirmation", lambda **_kwargs: True)
+
+    window._delete_from_active_pane_permanent()
+    _wait_for_jobs(window)
+
+    assert not target.exists()
+    _close_window(window)
+
+
+def test_e2e_alt_f7_opens_find_dialog_and_search_finds_match(tmp_path: Path, monkeypatch) -> None:
+    left, right = _setup_split(tmp_path)
+    (left / "a.txt").write_text("magic-marker")
+    (left / "b.txt").write_text("nothing")
+    window = _make_main_window(left, right)
+
+    captured = {}
+    real_find_files = None
+
+    from multipane_commander.ui import find_files_dialog as ff_mod
+
+    real_find_files = ff_mod.find_files
+
+    class FakeDialog:
+        def __init__(self, root, *, parent=None, on_open=None) -> None:
+            captured["root"] = root
+            captured["on_open"] = on_open
+
+        def exec(self) -> int:
+            captured["results"] = real_find_files(captured["root"], name_pattern="*.txt", content_query="magic")
+            return 0
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.FindFilesDialog", FakeDialog)
+
+    window._find_files_in_active_pane()
+
+    assert captured["root"] == left
+    paths = {r.path.name for r in captured["results"]}
+    assert paths == {"a.txt"}
+    _close_window(window)
+
+
+def test_e2e_ctrl_m_renames_via_template_and_pushes_undo(tmp_path: Path, monkeypatch) -> None:
+    left, right = _setup_split(tmp_path)
+    a = left / "old1.txt"
+    b = left / "old2.txt"
+    a.write_text("1")
+    b.write_text("2")
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane.marked_paths = {a, b}
+
+    from multipane_commander.ui import multi_rename_dialog as mr_mod
+
+    real_build = mr_mod.build_preview
+
+    class FakeMRD:
+        DialogCode = type("DC", (), {"Accepted": 1})
+
+        def __init__(self, sources, *, parent=None, **_kwargs) -> None:
+            self._sources = list(sources)
+
+        def exec(self) -> int:
+            return self.DialogCode.Accepted
+
+        def previews(self):
+            return real_build(self._sources, name_template="renamed_[C]", ext_template="[E]")
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.MultiRenameDialog", FakeMRD)
+
+    window._multi_rename_in_active_pane()
+
+    assert (left / "renamed_1.txt").exists()
+    assert (left / "renamed_2.txt").exists()
+    assert not (left / "old1.txt").exists()
+    assert not (left / "old2.txt").exists()
+    assert len(window.undo_stack) == 2
+    _close_window(window)

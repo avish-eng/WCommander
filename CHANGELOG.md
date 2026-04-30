@@ -45,3 +45,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - Added `tests/test_keyboard_shortcuts.py` — regression suite (R1–R13) covering F2 / Shift+F6 rename, F5/F6/F7/F8/Delete operations, Backspace navigation, Insert/Space selection toggle (with TC-style cursor advance), Esc clear-marks, Ctrl+A mark-all, Ctrl+R refresh, Enter on directory / parent row.
+- Added `tests/test_e2e_scenarios.py` — 10 Layer-A end-to-end scenarios that build a real `MainWindow` over a synthetic `AppContext` rooted at `tmp_path` and drive it through the full shortcut → handler → service → file-system chain via `QTest`. Covers: arrow-key cursor nav, Tab pane cycle, type-to-jump, Ctrl+S filter reveal, Alt+F1 drive menu dispatch, F2 rename + Ctrl+Z revert, F5 copy with `JobManager` thread completion, Shift+F8 permanent delete, Alt+F7 find-files, Ctrl+M multi-rename. ~21s runtime.
