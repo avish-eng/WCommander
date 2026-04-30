@@ -133,11 +133,21 @@ Name, extension, size, mtime, ctime, unsorted. Toggle via column header click or
 - **Brief** — icon + name grid
 - **Thumbnails** — image thumbnail grid
 - **Tree** — collapsible directory tree
-- **Quick View** — rich preview of the peer pane's cursor item: text with syntax highlight, image, PDF first-page, hex for binaries
+- **Quick View** — rich preview of the peer pane's cursor item:
+  - Text with syntax highlight (Pygments — Python, TS, JSON, YAML, Rust, Go, SQL, shell, Dockerfile, TOML, etc.)
+  - Markdown (`.md`) and HTML (`.html`) rendered via `QTextBrowser`; HTML has a "Web" toggle that switches to `QWebEngineView` (Chromium) for JS-heavy pages
+  - PDF (page navigation), SVG, image (`.png`, `.jpg`, `.tiff`, `.ico`, `.heic`, …)
+  - CSV / TSV — rendered as a sortable table (capped at 1 000 × 100)
+  - Audio / video — `QMediaPlayer` + `QVideoWidget`, no autoplay, scrubbable seek bar (`.mp4`, `.mov`, `.mkv`, `.webm`, `.mp3`, `.flac`, …)
+  - Archives — directory listing for `.zip`, `.tar(.gz/.bz2/.xz)`, `.7z`, `.rar`, `.jar`
+  - Hex dump for binaries (offset + ascii) — first 4 KB
+  - **Raw toggle** (header button or `Tab`, also `Ctrl+Shift+R` / F10 menu) — flips any rich renderer to the underlying file source in monospace
 
 ### 6.4 Quick Search
 
-Type any character while a pane is focused to jump to the first matching filename. `Ctrl+S` opens a filter box that narrows the list in place. `Esc` clears.
+Type any printable character while a pane is focused to advance the cursor to the first entry whose name starts with the typed prefix; subsequent characters extend the prefix. The buffer clears after a 750 ms inactivity timeout (so a fresh keystroke starts a new prefix).
+
+`Ctrl+S` opens an inline filter bar at the top of the active pane. Typing narrows the visible entries by case-insensitive substring match; `Esc` clears the bar and restores the list, `Enter` dismisses the bar while keeping the filter applied.
 
 ### 6.5 Refresh & File Watching
 
@@ -325,21 +335,33 @@ Buttons are reorderable by drag. User-commands can also be bound to F-keys via c
 
 ## 14. Function Key Bar
 
-| Key      | Action                                         |
-|----------|------------------------------------------------|
-| F1       | Help                                           |
-| F2       | Rename (NC/TC convention; same as Shift+F6)    |
-| F3       | View file                                      |
-| F4       | Edit file                                      |
-| F5       | Copy (to resolved destination)                 |
-| F6       | Move                                           |
-| Shift+F6 | Rename (TC alias of F2)                        |
-| F7       | Make directory                                 |
-| F8       | Delete (to Recycle Bin by default)             |
-| F9       | Toggle terminal visibility (alias: `Ctrl+\``)  |
-| F10      | Menu                                           |
-| F11      | Layout presets                                 |
-| F12      | Jobs view                                      |
+| Key                    | Action                                            |
+|------------------------|---------------------------------------------------|
+| F1                     | Help                                              |
+| F2                     | Rename (NC/TC convention; same as Shift+F6)       |
+| F3                     | View file (Quick View, §6.3)                      |
+| Shift+F3               | Open in OS-associated viewer                      |
+| F4                     | Edit file (text-like) / open default app (binary) |
+| Shift+F4               | Open in OS-associated default app                 |
+| F5                     | Copy (to resolved destination)                    |
+| F6                     | Move                                              |
+| Shift+F6               | Rename (TC alias of F2)                           |
+| F7                     | Make directory                                    |
+| F8                     | Delete (to Recycle Bin by default)                |
+| Shift+F8 / Shift+Del   | Permanent delete (bypass Recycle Bin)             |
+| F9                     | Toggle terminal visibility (alias: `Ctrl+\``)     |
+| F10                    | Menu                                              |
+| F11                    | Layout presets                                    |
+| F12                    | Jobs view                                         |
+| Alt+F1 / Alt+F2        | Drive menu for active / passive pane              |
+| Alt+F7                 | Find files                                        |
+| Ctrl+M                 | Multi-rename                                      |
+| Ctrl+S                 | Quick-filter bar                                  |
+| Ctrl+Z                 | Undo (rename, v1 scope)                           |
+| Ctrl+Enter / Alt+Enter | Paste cursor name / full path into terminal       |
+| Ctrl+Shift+R           | Quick View — toggle Raw source                    |
+| Alt+1 … Alt+6          | Layout presets                                    |
+| Alt+Arrow              | Focus pane in that direction                      |
 
 F-keys fire globally regardless of focus; printable keys respect focus (so typing into the terminal doesn't also scroll a pane).
 

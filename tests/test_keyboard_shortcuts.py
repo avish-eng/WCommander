@@ -1256,6 +1256,76 @@ def test_F0_1_end_jumps_to_last(tmp_path: Path) -> None:
     )
 
 
+def test_F0_1_keypad_modifier_does_not_block_arrows(tmp_path: Path) -> None:
+    """On macOS the standard arrow keys carry KeypadModifier. Regression for
+    a bug where the modifier guard treated KeypadModifier as 'user is invoking
+    a Ctrl/Alt+arrow shortcut, leave alone' and silently no-op'd every press.
+    """
+    _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    first = pane.file_list.topLevelItem(0)
+    pane.file_list.setCurrentItem(first)
+
+    # Synthesize the macOS-style Down: NoModifier OR'd with KeypadModifier.
+    event = _key_event(Qt.Key.Key_Down, Qt.KeyboardModifier.KeypadModifier)
+    handled = pane._handle_navigation_key(pane.file_list, event)
+
+    assert handled is True
+    assert pane.file_list.currentItem() is not first
+
+
+def test_F0_1_arrow_event_on_viewport_advances_cursor(tmp_path: Path) -> None:
+    """QAbstractScrollArea routes key events to viewport() (its focus proxy).
+    The eventFilter watch-set must include viewport, otherwise arrows arrive
+    at viewport with no handler and silently fall through.
+    """
+    _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    first = pane.file_list.topLevelItem(0)
+    pane.file_list.setCurrentItem(first)
+
+    event = _key_event(Qt.Key.Key_Down)
+    handled = pane.eventFilter(pane.file_list.viewport(), event)
+
+    assert handled is True
+    assert pane.file_list.currentItem() is not first
+
+
+def test_F0_1_cursor_row_delegate_paints_current_with_accent(tmp_path: Path) -> None:
+    """`_CursorRowDelegate` must paint the cursor row with palette.active_pane_border
+    (the accent), bypassing QSS rules on QTreeWidget::item that would otherwise
+    swallow per-item setBackground() brushes.
+    """
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
+
+    delegate = pane.file_list.itemDelegate()
+    # Sanity — the delegate must be the cursor-row delegate, not Qt's default.
+    assert type(delegate).__name__ == "_CursorRowDelegate"
+
+    image = QImage(120, 32, QImage.Format.Format_ARGB32)
+    image.fill(0)
+    painter = QPainter(image)
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 120, 32)
+    option.widget = pane.file_list
+    delegate.initStyleOption(option, pane.file_list.model().index(0, 0))
+    delegate.paint(painter, option, pane.file_list.model().index(0, 0))
+    painter.end()
+
+    expected = QColor(pane.theme_palette.active_pane_border).rgb()
+    # Sample the centre of the row — it must be the accent fill.
+    actual = image.pixel(60, 16)
+    assert (actual & 0x00FFFFFF) == (expected & 0x00FFFFFF), (
+        f"cursor row not painted with accent: got {actual:#010x}, want {expected:#010x}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper assertion: confirm the population helper itself is right
 # (so failures above can be attributed to handlers, not test scaffolding).
