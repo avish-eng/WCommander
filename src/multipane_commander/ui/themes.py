@@ -606,42 +606,44 @@ QLabel#terminalPath {{
 QWidget#breadcrumbHost {{
     background: {palette.breadcrumb_bg};
     border: 1px solid {palette.breadcrumb_border};
-    border-radius: 10px;
-    min-height: 38px;
+    border-radius: 8px;
+    min-height: 30px;
 }}
 QWidget#tabStripHost {{
     background: transparent;
+    border-bottom: 1px solid {palette.tab_border};
 }}
 QPushButton#breadcrumbButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 4px 6px;
+    border-radius: 6px;
+    padding: 2px 5px;
     color: {palette.breadcrumb_text};
+    font-size: {max(8, font_size - 1)}pt;
     text-align: left;
 }}
 QPushButton#breadcrumbButton[current="true"] {{
-    background: {palette.breadcrumb_current_bg};
-    border-color: {palette.breadcrumb_current_border};
-    color: {palette.breadcrumb_current_text};
-    font-weight: 600;
+    background: transparent;
+    border-color: transparent;
+    color: {palette.breadcrumb_text};
+    font-weight: 500;
 }}
 QPushButton#breadcrumbButton:hover {{
     background: {palette.bookmark_hover_bg};
     border-color: {palette.bookmark_hover_border};
 }}
 QPushButton#breadcrumbNavButton {{
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
     padding: 0px;
-    margin-right: 6px;
+    margin-right: 4px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 6px;
     color: {palette.breadcrumb_text};
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
 }}
 QPushButton#breadcrumbNavButton:hover {{
@@ -660,17 +662,17 @@ QLabel#breadcrumbSeparator {{
     padding: 0 1px;
 }}
 QPushButton#breadcrumbBookmarkButton {{
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
     padding: 0px;
-    margin-left: 6px;
+    margin-left: 4px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 6px;
     color: {palette.bookmark_text};
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 700;
 }}
 QPushButton#breadcrumbBookmarkButton:hover {{
@@ -777,9 +779,11 @@ QComboBox#themePicker {{
     border-radius: 10px;
 }}
 QComboBox#thumbnailSizePicker {{
-    min-width: 104px;
-    min-height: 30px;
-    padding: 4px 10px;
+    min-width: 92px;
+    min-height: 24px;
+    padding: 2px 7px;
+    border-radius: 7px;
+    font-size: {max(8, font_size - 1)}pt;
 }}
 QComboBox#quickViewSizePicker QAbstractItemView,
 QComboBox#thumbnailSizePicker QAbstractItemView,
@@ -808,9 +812,6 @@ QTreeWidget::item:selected,
 QListWidget#thumbnailList::item:selected {{
     background: {palette.tree_selected_bg};
 }}
-QTreeWidget::item:alternate {{
-    background: {palette.tree_alternate_bg};
-}}
 QListWidget#thumbnailList {{
     padding: 10px;
 }}
@@ -832,11 +833,13 @@ QPushButton {{
     padding: 6px 12px;
 }}
 QPushButton#secondaryActionButton {{
-    min-height: 30px;
-    padding: 4px 10px;
+    min-height: 24px;
+    padding: 2px 7px;
+    border-radius: 7px;
     background: {palette.secondary_button_bg};
     color: {palette.secondary_button_text};
     border-color: {palette.secondary_button_border};
+    font-size: {max(8, font_size - 1)}pt;
 }}
 QPushButton#terminalHistoryActionButton {{
     min-width: 26px;
@@ -881,28 +884,34 @@ QPushButton[dialogRole="secondary"] {{
 }}
 QPushButton#tabButton,
 QPushButton#tabAddButton {{
-    min-height: 32px;
-    padding: 6px 12px;
-    border-radius: 10px 10px 0px 0px;
-    background: {palette.tab_bg};
+    min-height: 26px;
+    padding: 3px 12px;
+    border-radius: 0px;
+    background: transparent;
     color: {palette.tab_text};
-    border: 1px solid {palette.tab_border};
-    border-bottom: none;
+    border: 1px solid transparent;
+    border-right-color: {palette.tab_border};
+    font-size: {max(8, font_size - 1)}pt;
+    font-weight: 500;
 }}
 QPushButton#tabButton[active="true"] {{
     background: {palette.tab_active_bg};
     color: {palette.tab_active_text};
     border-color: {palette.tab_active_border};
+    border-bottom-color: {palette.tab_active_bg};
+    border-radius: 12px 12px 0px 0px;
     font-weight: 600;
 }}
 QPushButton#tabButton:hover {{
-    background: {palette.tab_hover_bg};
+    background: {_rgba(palette.active_pane_border, 0.10)};
     color: {palette.tab_hover_text};
-    border-color: {palette.tab_hover_border};
+    border-color: transparent;
+    border-right-color: {palette.tab_border};
 }}
 QPushButton#tabAddButton {{
-    min-width: 34px;
-    padding: 6px 0px;
+    min-width: 28px;
+    padding: 3px 0px;
+    border-right-color: transparent;
 }}
 QPushButton#secondaryActionButton[active="true"] {{
     background: {palette.secondary_button_active_bg};

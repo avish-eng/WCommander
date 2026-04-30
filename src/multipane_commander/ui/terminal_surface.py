@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QKeySequence, QTextCursor
+from PySide6.QtGui import QColor, QFocusEvent, QFont, QFontDatabase, QKeyEvent, QKeySequence, QPainter, QTextCursor
 from PySide6.QtWidgets import QApplication, QPlainTextEdit
 
 from multipane_commander.terminal.ansi import TerminalBuffer
@@ -31,7 +31,9 @@ class TerminalSurface(QPlainTextEdit):
         self._last_local_command = ""
         self._input_ready = True
         self._pending_bytes: list[bytes] = []
+        self._terminal_cursor_focused = False
         self.setTabStopDistance(self._cell_size().width() * 8)
+        self.selectionChanged.connect(self.viewport().update)
 
     def set_sender(self, sender) -> None:
         self._sender = sender
@@ -63,10 +65,9 @@ class TerminalSurface(QPlainTextEdit):
                 return
         rendered = self._buffer.feed(text)
         self.setPlainText(rendered)
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.setTextCursor(cursor)
+        self._sync_text_cursor_to_terminal_cursor()
         self.ensureCursorVisible()
+        self.viewport().update()
 
     def inject_command(self, command: str, *, run: bool) -> None:
         if not command:
@@ -91,6 +92,8 @@ class TerminalSurface(QPlainTextEdit):
         self._last_local_command = ""
         self._pending_bytes = []
         super().clear()
+        self._sync_text_cursor_to_terminal_cursor()
+        self.viewport().update()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -98,6 +101,35 @@ class TerminalSurface(QPlainTextEdit):
         if cols > 0 and rows > 0:
             self._buffer.set_size(cols, rows)
             self.terminal_resized.emit(cols, rows)
+        self.viewport().update()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # type: ignore[override]
+        super().focusInEvent(event)
+        self._terminal_cursor_focused = True
+        self._sync_text_cursor_to_terminal_cursor()
+        self.viewport().update()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # type: ignore[override]
+        super().focusOutEvent(event)
+        self._terminal_cursor_focused = False
+        self.viewport().update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        if not self._should_draw_terminal_cursor():
+            return
+
+        cursor_rect = self.cursorRect(self.textCursor())
+        cell = self._cell_size()
+        width = max(2, cell.width())
+        height = max(2, min(cell.height(), cursor_rect.height() or cell.height()))
+        x = min(max(0, cursor_rect.x()), max(0, self.viewport().width() - width))
+        y = min(max(0, cursor_rect.y()), max(0, self.viewport().height() - height))
+        color = self.palette().highlight().color()
+        if not color.isValid():
+            color = QColor("#4FD1FF")
+        painter = QPainter(self.viewport())
+        painter.fillRect(x, y, width, height, color)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         if event.matches(QKeySequence.StandardKey.Copy):
@@ -196,6 +228,29 @@ class TerminalSurface(QPlainTextEdit):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.deletePreviousChar()
         self.setTextCursor(cursor)
+        self.viewport().update()
+
+    def _sync_text_cursor_to_terminal_cursor(self) -> None:
+        cursor = self.textCursor()
+        cursor.setPosition(self._document_position_for_terminal_cursor())
+        self.setTextCursor(cursor)
+
+    def _document_position_for_terminal_cursor(self) -> int:
+        text = self.toPlainText()
+        if not text:
+            return 0
+
+        lines = text.split("\n")
+        if self._buffer.cursor_row >= len(lines):
+            return len(text)
+
+        row = max(0, self._buffer.cursor_row)
+        position = sum(len(line) + 1 for line in lines[:row])
+        column = min(max(0, self._buffer.cursor_col), len(lines[row]))
+        return position + column
+
+    def _should_draw_terminal_cursor(self) -> bool:
+        return self._terminal_cursor_focused and not self.textCursor().hasSelection()
 
     def _normalize_local_echo_output(self, text: str) -> str:
         normalized = text.replace("\r\n", "\n")

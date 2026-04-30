@@ -105,8 +105,8 @@ class PaneView(QFrame):
         self.set_active(active)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(5)
 
         refresh_button = QPushButton("Refresh")
         refresh_button.setObjectName("secondaryActionButton")
@@ -114,7 +114,7 @@ class PaneView(QFrame):
 
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
-        title_row.setSpacing(8)
+        title_row.setSpacing(6)
         title_row.addWidget(self.folder_browser_toggle)
         title_row.addWidget(self.thumbnail_toggle)
         title_row.addWidget(self.thumbnail_size_picker)
@@ -125,9 +125,9 @@ class PaneView(QFrame):
 
         self.tab_strip_host.setObjectName("tabStripHost")
         self.tab_strip_layout.setContentsMargins(0, 0, 0, 0)
-        self.tab_strip_layout.setSpacing(6)
+        self.tab_strip_layout.setSpacing(4)
         self.breadcrumb_host.setObjectName("breadcrumbHost")
-        self.breadcrumb_layout.setContentsMargins(10, 5, 10, 5)
+        self.breadcrumb_layout.setContentsMargins(8, 3, 8, 3)
         self.breadcrumb_layout.setSpacing(2)
         self.folder_browser_toggle.setObjectName("secondaryActionButton")
         self.folder_browser_toggle.clicked.connect(self._toggle_folder_browser)
@@ -149,7 +149,7 @@ class PaneView(QFrame):
         self.file_list.setObjectName("fileList")
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.file_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.file_list.setAlternatingRowColors(True)
+        self.file_list.setAlternatingRowColors(False)
         self.file_list.setRootIsDecorated(False)
         self.file_list.setUniformRowHeights(True)
         self.file_list.setHeaderLabels(["Name", "Type", "Size", "Modified"])

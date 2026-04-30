@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QFocusEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from multipane_commander.ui.terminal_surface import TerminalSurface
@@ -56,3 +56,31 @@ def test_terminal_surface_ctrl_c_with_selection_copies_text() -> None:
     surface.keyPressEvent(_ctrl_c_event())
 
     assert app.clipboard().text() == "hello"
+
+
+def test_terminal_surface_draws_cursor_while_focused_without_selection() -> None:
+    _qapp()
+    surface = TerminalSurface()
+
+    surface.focusInEvent(QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.OtherFocusReason))
+
+    assert surface._should_draw_terminal_cursor() is True
+
+    surface.append_output("hello")
+    surface.selectAll()
+
+    assert surface._should_draw_terminal_cursor() is False
+
+    surface.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason))
+
+    assert surface._should_draw_terminal_cursor() is False
+
+
+def test_terminal_surface_syncs_caret_to_terminal_buffer_cursor() -> None:
+    _qapp()
+    surface = TerminalSurface()
+
+    surface.append_output("abc\rX")
+
+    assert surface.toPlainText() == "Xbc"
+    assert surface.textCursor().position() == 1
