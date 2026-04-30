@@ -390,6 +390,61 @@ def test_e2e_alt_f7_opens_find_dialog_and_search_finds_match(tmp_path: Path, mon
     _close_window(window)
 
 
+def test_e2e_ctrl_shift_r_toggles_quick_view_raw_mode(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    md = left / "doc.md"
+    md.write_text("# heading\n\nbody\n", encoding="utf-8")
+    window = _make_main_window(left, right)
+    active = window.pane_views[0]
+    active.refresh()
+    # Cursor on the markdown file in the active pane.
+    item = _row_for_path(active, md)
+    active.file_list.setCurrentItem(item)
+    QApplication.processEvents()
+
+    # Reveal Quick View in the passive pane and sync.
+    window._show_passive_quick_view()
+    QApplication.processEvents()
+    passive = window.pane_views[1]
+    quick_view = passive.quick_view
+    assert quick_view.stack.currentWidget() is quick_view.markdown_view
+
+    QTest.keySequence(window, QKeySequence("Ctrl+Shift+R"))
+    QApplication.processEvents()
+    assert quick_view.is_raw_mode()
+    assert quick_view.stack.currentWidget() is quick_view.raw_text_view
+
+    QTest.keySequence(window, QKeySequence("Ctrl+Shift+R"))
+    QApplication.processEvents()
+    assert quick_view.is_raw_mode() is False
+    assert quick_view.stack.currentWidget() is quick_view.markdown_view
+
+    _close_window(window)
+
+
+def test_e2e_f10_menu_lists_raw_and_web_toggle_actions(tmp_path: Path) -> None:
+    from PySide6.QtWidgets import QMenu
+
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    menu = window._build_main_menu()
+
+    def walk_titles(m: QMenu) -> list[str]:
+        out: list[str] = []
+        for action in m.actions():
+            out.append(action.text())
+            sub = action.menu()
+            if sub is not None:
+                out.extend(walk_titles(sub))
+        return out
+
+    titles = walk_titles(menu)
+    assert any("Toggle Raw Source" in t for t in titles), titles
+    assert any("Toggle Web Render" in t for t in titles), titles
+
+    _close_window(window)
+
+
 def test_e2e_ctrl_m_renames_via_template_and_pushes_undo(tmp_path: Path, monkeypatch) -> None:
     left, right = _setup_split(tmp_path)
     a = left / "old1.txt"

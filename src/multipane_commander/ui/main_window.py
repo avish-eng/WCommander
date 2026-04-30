@@ -296,6 +296,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
         QShortcut(QKeySequence("Shift+F3"), self, activated=self._open_external_viewer)
         QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
+        QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._toggle_quick_view_raw_mode)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
@@ -604,6 +605,12 @@ class MainWindow(QMainWindow):
         view_action = QAction("View (F3)", self)
         view_action.triggered.connect(self._toggle_passive_quick_view)
         file_menu.addAction(view_action)
+        raw_view_action = QAction("View — Toggle Raw Source (Ctrl+Shift+R)", self)
+        raw_view_action.triggered.connect(self._toggle_quick_view_raw_mode)
+        file_menu.addAction(raw_view_action)
+        web_view_action = QAction("View — Toggle Web Render (HTML)", self)
+        web_view_action.triggered.connect(self._toggle_quick_view_web_mode)
+        file_menu.addAction(web_view_action)
         edit_action = QAction("Edit (F4)", self)
         edit_action.triggered.connect(self._edit_in_active_pane)
         file_menu.addAction(edit_action)
@@ -953,6 +960,18 @@ class MainWindow(QMainWindow):
             self._sync_quick_view(self._active_pane())
         else:
             preview_pane.set_quick_view_source(None)
+
+    def _toggle_quick_view_raw_mode(self) -> None:
+        preview_pane = self._passive_pane()
+        if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_raw_mode()
+
+    def _toggle_quick_view_web_mode(self) -> None:
+        preview_pane = self._passive_pane()
+        if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_web_mode()
 
     def _show_passive_quick_view(self) -> None:
         preview_pane = self._passive_pane()

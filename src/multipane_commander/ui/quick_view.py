@@ -294,6 +294,26 @@ class QuickViewWidget(QFrame):
         self._current_html_path: Path | None = None
         self._apply_size_preset(self.size_picker.currentText())
 
+    def is_raw_toggle_available(self) -> bool:
+        return not self.raw_button.isHidden()
+
+    def is_web_toggle_available(self) -> bool:
+        return not self.web_button.isHidden()
+
+    def is_raw_mode(self) -> bool:
+        return self.raw_button.isChecked()
+
+    def is_web_mode(self) -> bool:
+        return self.web_button.isChecked()
+
+    def toggle_raw_mode(self) -> None:
+        if self.is_raw_toggle_available():
+            self.raw_button.toggle()
+
+    def toggle_web_mode(self) -> None:
+        if self.is_web_toggle_available():
+            self.web_button.toggle()
+
     def current_size_preset(self) -> str:
         return self.size_picker.currentText()
 
