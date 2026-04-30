@@ -242,6 +242,57 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F2_13_dir_size_with_cap_sums_files(tmp_path: Path) -> None:
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "a.txt").write_text("12345")  # 5 bytes
+    (sub / "b.txt").write_text("hello")  # 5 bytes
+    inner = sub / "inner"
+    inner.mkdir()
+    (inner / "c.txt").write_text("xxx")  # 3 bytes
+
+    from multipane_commander.ui.pane_view import PaneView
+
+    total, capped = PaneView._dir_size_with_cap(sub, cap=1000)
+
+    assert total == 13
+    assert capped is False
+
+
+def test_F2_13_dir_size_with_cap_marks_capped(tmp_path: Path) -> None:
+    sub = tmp_path / "many"
+    sub.mkdir()
+    for i in range(20):
+        (sub / f"f{i}.txt").write_text("x")
+
+    from multipane_commander.ui.pane_view import PaneView
+
+    _, capped = PaneView._dir_size_with_cap(sub, cap=5)
+
+    assert capped is True
+
+
+def test_F2_13_space_on_dir_updates_size_column(tmp_path: Path) -> None:
+    sub = tmp_path / "child_dir"
+    sub.mkdir()
+    (sub / "a.txt").write_text("12345")
+    pane = _make_pane(tmp_path)
+    _set_cursor_to(pane, sub)
+    item = pane.file_list.currentItem()
+    assert item.text(2) == "", "size column should start empty for directories"
+
+    pane.keyPressEvent(_key_event(Qt.Key.Key_Space))
+
+    # find the row for `sub` and check column 2 is no longer empty
+    for row in range(pane.file_list.topLevelItemCount()):
+        candidate = pane.file_list.topLevelItem(row)
+        if candidate.data(0, Qt.ItemDataRole.UserRole) == sub:
+            assert candidate.text(2), f"size column should be populated after Space; got {candidate.text(2)!r}"
+            break
+    else:
+        raise AssertionError("sub row not found")
+
+
 def test_F1_7_quick_filter_hides_non_matching_entries(tmp_path: Path) -> None:
     (tmp_path / "alpha.txt").write_text("a")
     (tmp_path / "beta.txt").write_text("b")

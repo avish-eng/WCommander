@@ -1072,8 +1072,50 @@ class PaneView(QFrame):
             self.marked_paths.remove(path)
         else:
             self.marked_paths.add(path)
+        if path.is_dir():
+            self._compute_and_apply_dir_size(item, path)
         self._advance_current_item()
         self._update_status()
+
+    def _compute_and_apply_dir_size(self, item, path: Path) -> None:
+        """Compute total bytes under `path` and update the size column.
+
+        v1: synchronous walk capped at 50 000 entries so we never hang the
+        UI on pathological trees. For trees over the cap the column shows
+        "(>50k items)" instead of a number. Move to QThreadPool when we
+        have a baseline for typical sizes.
+        """
+        size, capped = self._dir_size_with_cap(path, cap=50_000)
+        if isinstance(item, QTreeWidgetItem):
+            label = self._format_size(size) + (" (capped)" if capped else "")
+            item.setText(2, label)
+            item.setData(0, Qt.ItemDataRole.UserRole + 2, size)
+
+    @staticmethod
+    def _dir_size_with_cap(root: Path, *, cap: int) -> tuple[int, bool]:
+        total = 0
+        seen = 0
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            try:
+                with __import__("os").scandir(current) as it:
+                    for entry in it:
+                        seen += 1
+                        if seen > cap:
+                            return total, True
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                            else:
+                                total += entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        return total, False
 
     def _go_up(self) -> None:
         self.navigate_to(self.active_tab.path.parent)
