@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
+from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -38,6 +41,27 @@ from multipane_commander.ui.themes import (
     resolve_theme_definition,
 )
 from multipane_commander.ui.transfer_dialog import TransferDialog
+
+
+def launch_editor(path: Path) -> str:
+    """Launch a text editor for `path` per SPEC §19.5.
+
+    Resolution order: $VISUAL, $EDITOR, ``code`` on PATH, then the OS
+    default association via ``QDesktopServices``. Returns the strategy
+    used (``"visual"``, ``"editor"``, ``"code"``, or ``"desktop"``) so
+    callers and tests can verify the path taken.
+    """
+    for env_var, label in (("VISUAL", "visual"), ("EDITOR", "editor")):
+        value = os.environ.get(env_var)
+        if value:
+            subprocess.Popen([value, str(path)])
+            return label
+    code_bin = shutil.which("code")
+    if code_bin:
+        subprocess.Popen([code_bin, str(path)])
+        return "code"
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    return "desktop"
 
 
 def determine_drag_drop_operation(
@@ -216,7 +240,7 @@ class MainWindow(QMainWindow):
             ("F8", "Delete", self._delete_from_active_pane),
             ("Ctrl+R", "Refresh", self._refresh_active_pane),
             ("F9", "Terminal", self._toggle_terminal),
-            ("F10", "Menu", self._show_menu_placeholder),
+            ("F10", "Menu", self._show_main_menu),
             ("F11", "Layout", self._show_layout_menu),
             ("F12", "Jobs", self._toggle_jobs_view),
             ("Ctrl+Shift+V", "Thumbs", self._toggle_thumbnail_mode_in_active_pane),
@@ -229,6 +253,7 @@ class MainWindow(QMainWindow):
         )
         QShortcut(QKeySequence(Qt.Key.Key_F2), self, activated=self._rename_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F3), self, activated=self._toggle_passive_quick_view)
+        QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
@@ -245,6 +270,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F8), self, activated=self._delete_from_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self._delete_from_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
+        QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F12), self, activated=self._toggle_jobs_view)
         QShortcut(QKeySequence("Ctrl+`"), self, activated=self._toggle_terminal)
@@ -476,22 +502,76 @@ class MainWindow(QMainWindow):
         path = self._active_pane().current_path()
         if path is None:
             return
-        show_message(
-            parent=self,
-            title="Edit",
-            message=f"Editor launch is not implemented yet.\n\nSelected item:\n{path}",
-            level="info",
-            accept_label="Close",
-        )
+        launch_editor(path)
 
-    def _show_menu_placeholder(self) -> None:
-        show_message(
-            parent=self,
-            title="Menu",
-            message="Menu actions are not implemented yet.",
-            level="info",
-            accept_label="Close",
-        )
+    def _show_main_menu(self) -> None:
+        menu = self._build_main_menu()
+        popup_point = QCursor.pos()
+        menu_size = menu.sizeHint()
+        popup_point.setY(max(0, popup_point.y() - menu_size.height()))
+        menu.exec(popup_point)
+
+    def _build_main_menu(self) -> QMenu:
+        """Build the F10/menu-bar menu organised by SPEC §5.4 sections."""
+        menu = QMenu(self)
+
+        file_menu = menu.addMenu("File")
+        view_action = QAction("View (F3)", self)
+        view_action.triggered.connect(self._toggle_passive_quick_view)
+        file_menu.addAction(view_action)
+        edit_action = QAction("Edit (F4)", self)
+        edit_action.triggered.connect(self._edit_in_active_pane)
+        file_menu.addAction(edit_action)
+        copy_action = QAction("Copy (F5)", self)
+        copy_action.triggered.connect(self._copy_from_active_pane)
+        file_menu.addAction(copy_action)
+        move_action = QAction("Move (F6)", self)
+        move_action.triggered.connect(self._move_from_active_pane)
+        file_menu.addAction(move_action)
+        rename_action = QAction("Rename (F2)", self)
+        rename_action.triggered.connect(self._rename_in_active_pane)
+        file_menu.addAction(rename_action)
+        mkdir_action = QAction("New Directory (F7)", self)
+        mkdir_action.triggered.connect(self._mkdir_in_active_pane)
+        file_menu.addAction(mkdir_action)
+        delete_action = QAction("Delete (F8)", self)
+        delete_action.triggered.connect(self._delete_from_active_pane)
+        file_menu.addAction(delete_action)
+
+        mark_menu = menu.addMenu("Mark")
+        mark_all_action = QAction("Mark All (Ctrl+A)", self)
+        mark_all_action.triggered.connect(lambda: self._active_pane()._mark_all_entries())
+        mark_menu.addAction(mark_all_action)
+        clear_marks_action = QAction("Clear Marks (Esc)", self)
+        clear_marks_action.triggered.connect(lambda: self._active_pane()._clear_marks())
+        mark_menu.addAction(clear_marks_action)
+
+        commands_menu = menu.addMenu("Commands")
+        refresh_action = QAction("Refresh (Ctrl+R)", self)
+        refresh_action.triggered.connect(self._refresh_active_pane)
+        commands_menu.addAction(refresh_action)
+        new_tab_action = QAction("New Tab (Ctrl+T)", self)
+        new_tab_action.triggered.connect(self._new_tab_in_active_pane)
+        commands_menu.addAction(new_tab_action)
+        close_tab_action = QAction("Close Tab (Ctrl+W)", self)
+        close_tab_action.triggered.connect(self._close_tab_in_active_pane)
+        commands_menu.addAction(close_tab_action)
+
+        show_menu = menu.addMenu("Show")
+        terminal_action = QAction("Toggle Terminal (F9)", self)
+        terminal_action.triggered.connect(self._toggle_terminal)
+        show_menu.addAction(terminal_action)
+        layout_action = QAction("Layout… (F11)", self)
+        layout_action.triggered.connect(self._show_layout_menu)
+        show_menu.addAction(layout_action)
+        jobs_action = QAction("Jobs (F12)", self)
+        jobs_action.triggered.connect(self._toggle_jobs_view)
+        show_menu.addAction(jobs_action)
+        thumbs_action = QAction("Toggle Thumbnails (Ctrl+Shift+V)", self)
+        thumbs_action.triggered.connect(self._toggle_thumbnail_mode_in_active_pane)
+        show_menu.addAction(thumbs_action)
+
+        return menu
 
     def _show_layout_menu(self) -> None:
         menu = QMenu(self)

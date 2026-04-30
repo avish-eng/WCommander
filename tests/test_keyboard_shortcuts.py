@@ -242,6 +242,70 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F0_4_launch_editor_uses_visual_env_first(tmp_path: Path, monkeypatch) -> None:
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "doc.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("VISUAL", "myvisual")
+    monkeypatch.setenv("EDITOR", "myeditor")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "visual"
+    assert spawned == [["myvisual", str(target)]]
+
+
+def test_F0_4_launch_editor_falls_back_to_editor_env(tmp_path: Path, monkeypatch) -> None:
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "doc.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vi")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "editor"
+    assert spawned == [["vi", str(target)]]
+
+
+def test_F0_4_launch_editor_falls_back_to_desktop_when_nothing_set(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "doc.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    captured: list[str] = []
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr("multipane_commander.ui.main_window.shutil.which", lambda _name: None)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "desktop"
+    assert captured == [str(target)]
+
+
 def test_F0_3_f_keys_fire_with_qlineedit_focused() -> None:
     """SPEC §16 spike-3: F-keys must fire when path field or terminal has focus.
 
