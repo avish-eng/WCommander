@@ -6,6 +6,7 @@ from multipane_commander.config.model import AppConfig, TerminalConfig, ThemeCon
 
 def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     config = AppConfig(
         theme=ThemeConfig(
@@ -58,6 +59,7 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
 
 def test_config_store_handles_malformed_values(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     config_path = tmp_path / "MultiPaneCommander" / "config.json"
     config_path.parent.mkdir()
     config_path.write_text(

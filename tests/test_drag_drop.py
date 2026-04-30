@@ -5,9 +5,13 @@ from PySide6.QtCore import Qt
 from multipane_commander.ui.main_window import determine_drag_drop_operation
 
 
-def test_drag_drop_defaults_to_move_on_same_drive() -> None:
-    source_paths = [Path(r"C:\work\alpha.txt")]
-    destination_dir = Path(r"C:\work\target")
+def test_drag_drop_defaults_to_move_on_same_drive(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "multipane_commander.ui.main_window.same_filesystem",
+        lambda left, right: True,
+    )
+    source_paths = [Path("/work/alpha.txt")]
+    destination_dir = Path("/work/target")
 
     operation = determine_drag_drop_operation(
         source_paths,
@@ -18,9 +22,13 @@ def test_drag_drop_defaults_to_move_on_same_drive() -> None:
     assert operation == "move"
 
 
-def test_drag_drop_defaults_to_copy_across_drives() -> None:
-    source_paths = [Path(r"C:\work\alpha.txt")]
-    destination_dir = Path(r"D:\target")
+def test_drag_drop_defaults_to_copy_across_drives(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "multipane_commander.ui.main_window.same_filesystem",
+        lambda left, right: False,
+    )
+    source_paths = [Path("/work/alpha.txt")]
+    destination_dir = Path("/other/target")
 
     operation = determine_drag_drop_operation(
         source_paths,
