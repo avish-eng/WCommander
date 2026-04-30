@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multi-pane-commander"
+version = "0.1.0"
+description = "A Total Commander-inspired multi-pane file manager for Windows."
+readme = "SPEC.md"
+requires-python = ">=3.12"
+dependencies = [
+  "PySide6",
+  "send2trash",
+  "pywinpty",
+  "py7zr",
+  "libarchive-c",
+  "watchdog",
+  "pygments",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+]
+
+[project.scripts]
+mpc = "multipane_commander.app:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/multipane_commander"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
