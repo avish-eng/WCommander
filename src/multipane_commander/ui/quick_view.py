@@ -4,6 +4,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtPdf import QPdfDocument
+from PySide6.QtPdfWidgets import QPdfView
+from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -12,9 +15,43 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QScrollArea,
     QStackedWidget,
+    QTextBrowser,
     QVBoxLayout,
-    QWidget,
 )
+from pygments import highlight
+from pygments.formatters import HtmlFormatter
+from pygments.lexer import Lexer
+from pygments.lexers import get_lexer_for_filename
+from pygments.lexers.special import TextLexer
+from pygments.util import ClassNotFound
+
+
+_MARKDOWN_SUFFIXES = {".md", ".markdown"}
+_HTML_SUFFIXES = {".html", ".htm"}
+_PDF_SUFFIXES = {".pdf"}
+_SVG_SUFFIXES = {".svg"}
+
+
+def _resolve_code_lexer(filename: str) -> Lexer | None:
+    """Return a pygments lexer for ``filename`` or None for plain/unknown text."""
+    try:
+        lexer = get_lexer_for_filename(filename)
+    except ClassNotFound:
+        return None
+    if isinstance(lexer, TextLexer):
+        return None
+    return lexer
+
+
+def _format_hex_dump(data: bytes, bytes_per_row: int = 16) -> str:
+    """Return a classic offset/hex/ascii dump of ``data``."""
+    lines: list[str] = []
+    for offset in range(0, len(data), bytes_per_row):
+        chunk = data[offset : offset + bytes_per_row]
+        hex_part = " ".join(f"{b:02x}" for b in chunk).ljust(bytes_per_row * 3 - 1)
+        ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{offset:08x}  {hex_part}  {ascii_part}")
+    return "\n".join(lines)
 
 
 class QuickViewWidget(QFrame):
@@ -58,9 +95,43 @@ class QuickViewWidget(QFrame):
         self.image_scroll.setWidgetResizable(True)
         self.image_scroll.setWidget(self.image_label)
 
+        self.markdown_view = QTextBrowser()
+        self.markdown_view.setObjectName("quickViewMarkdown")
+        self.markdown_view.setOpenExternalLinks(True)
+
+        self.html_view = QTextBrowser()
+        self.html_view.setObjectName("quickViewHtml")
+        self.html_view.setOpenExternalLinks(True)
+
+        self.pdf_document = QPdfDocument(self)
+        self.pdf_view = QPdfView()
+        self.pdf_view.setObjectName("quickViewPdf")
+        self.pdf_view.setDocument(self.pdf_document)
+        self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+
+        self.svg_view = QSvgWidget()
+        self.svg_view.setObjectName("quickViewSvg")
+
+        self.code_view = QTextBrowser()
+        self.code_view.setObjectName("quickViewCode")
+
+        self.hex_view = QPlainTextEdit()
+        self.hex_view.setObjectName("quickViewHex")
+        self.hex_view.setReadOnly(True)
+        hex_font = QFont("Menlo")
+        hex_font.setStyleHint(QFont.StyleHint.Monospace)
+        hex_font.setPointSize(10)
+        self.hex_view.setFont(hex_font)
+
         self.stack.addWidget(self.empty_label)
         self.stack.addWidget(self.text_preview)
         self.stack.addWidget(self.image_scroll)
+        self.stack.addWidget(self.markdown_view)
+        self.stack.addWidget(self.html_view)
+        self.stack.addWidget(self.pdf_view)
+        self.stack.addWidget(self.svg_view)
+        self.stack.addWidget(self.code_view)
+        self.stack.addWidget(self.hex_view)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
@@ -120,6 +191,29 @@ class QuickViewWidget(QFrame):
                 self.stack.setCurrentWidget(self.image_scroll)
                 return
 
+        if suffix in _PDF_SUFFIXES:
+            self.pdf_document.load(str(path))
+            if self.pdf_document.status() == QPdfDocument.Status.Ready:
+                self.meta_label.setText(f"PDF • {self.pdf_document.pageCount()} page(s)")
+                self.stack.setCurrentWidget(self.pdf_view)
+                return
+            self.meta_label.setText("PDF • failed to load")
+            self.stack.setCurrentWidget(self.empty_label)
+            self.empty_label.setText("Unable to preview this PDF.")
+            return
+
+        if suffix in _SVG_SUFFIXES:
+            self.svg_view.load(str(path))
+            if self.svg_view.renderer().isValid():
+                size = self.svg_view.renderer().defaultSize()
+                self.meta_label.setText(f"SVG • {size.width()} x {size.height()}")
+                self.stack.setCurrentWidget(self.svg_view)
+                return
+            self.meta_label.setText("SVG • failed to parse")
+            self.stack.setCurrentWidget(self.empty_label)
+            self.empty_label.setText("Unable to preview this SVG.")
+            return
+
         try:
             file_size = path.stat().st_size
             with path.open("rb") as handle:
@@ -130,16 +224,36 @@ class QuickViewWidget(QFrame):
             self.empty_label.setText("Unable to preview this item.")
             return
 
+        if suffix in _MARKDOWN_SUFFIXES and b"\x00" not in raw:
+            self.meta_label.setText("Markdown")
+            self.markdown_view.setMarkdown(raw.decode("utf-8", errors="replace"))
+            self.stack.setCurrentWidget(self.markdown_view)
+            return
+
+        if suffix in _HTML_SUFFIXES and b"\x00" not in raw:
+            self.meta_label.setText("HTML")
+            self.html_view.setHtml(raw.decode("utf-8", errors="replace"))
+            self.stack.setCurrentWidget(self.html_view)
+            return
+
         if b"\x00" not in raw:
             text = raw[:80_000].decode("utf-8", errors="replace")
+            lexer = _resolve_code_lexer(path.name)
+            if lexer is not None:
+                formatter = HtmlFormatter(noclasses=True, nobackground=True)
+                rendered = highlight(text, lexer, formatter)
+                self.meta_label.setText(f"{lexer.name} source")
+                self.code_view.setHtml(rendered)
+                self.stack.setCurrentWidget(self.code_view)
+                return
             self.meta_label.setText("Text file")
             self.text_preview.setPlainText(text)
             self.stack.setCurrentWidget(self.text_preview)
             return
 
-        self.meta_label.setText(f"Binary file • {file_size:,} bytes")
-        self.stack.setCurrentWidget(self.empty_label)
-        self.empty_label.setText("Binary preview is not available yet.")
+        self.meta_label.setText(f"Binary • {file_size:,} bytes")
+        self.hex_view.setPlainText(_format_hex_dump(raw[:4096]))
+        self.stack.setCurrentWidget(self.hex_view)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         self._update_scaled_pixmap()

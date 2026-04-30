@@ -661,6 +661,391 @@ def test_F0_4_launch_editor_falls_back_to_desktop_when_nothing_set(tmp_path: Pat
     assert captured == [str(target)]
 
 
+def test_F0_4_launch_editor_falls_back_to_code_on_path(tmp_path: Path, monkeypatch) -> None:
+    """When VISUAL/EDITOR are unset but ``code`` is on PATH, use it (3rd in chain)."""
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "doc.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(
+        "multipane_commander.ui.main_window.shutil.which",
+        lambda name: "/usr/local/bin/code" if name == "code" else None,
+    )
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "code"
+    assert spawned == [["/usr/local/bin/code", str(target)]]
+
+
+def test_F0_4_edit_in_active_pane_returns_silently_when_no_path(monkeypatch) -> None:
+    """F4 with no current selection must be a no-op, not crash or call launch_editor."""
+    from multipane_commander.ui import main_window as mw
+
+    called: list[Path] = []
+    monkeypatch.setattr(mw, "launch_editor", lambda path: called.append(path))
+
+    class _StubPane:
+        def current_path(self) -> Path | None:
+            return None
+
+    class _StubMainWindow:
+        _active_pane = lambda self: _StubPane()  # noqa: E731
+        _edit_in_active_pane = mw.MainWindow._edit_in_active_pane
+
+    _StubMainWindow()._edit_in_active_pane()
+
+    assert called == []
+
+
+def test_F0_4_edit_in_active_pane_invokes_launch_editor_for_selected_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """F4 with a selection must call launch_editor with that exact path."""
+    from multipane_commander.ui import main_window as mw
+
+    target = tmp_path / "doc.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    called: list[Path] = []
+    monkeypatch.setattr(mw, "launch_editor", lambda path: called.append(path))
+
+    class _StubPane:
+        def current_path(self) -> Path:
+            return target
+
+    class _StubMainWindow:
+        _active_pane = lambda self: _StubPane()  # noqa: E731
+        _edit_in_active_pane = mw.MainWindow._edit_in_active_pane
+
+    _StubMainWindow()._edit_in_active_pane()
+
+    assert called == [target]
+
+
+# ---------------------------------------------------------------------------
+# F4 file-type routing — text-like paths use the editor chain, binary paths
+# skip $VISUAL/$EDITOR (which are text editors) and go straight to the OS
+# default association so images / PDFs / archives open in the right app.
+# ---------------------------------------------------------------------------
+
+
+def test_F0_4_launch_editor_skips_editor_for_image(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "image.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+
+    spawned: list[list[str]] = []
+    captured: list[str] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("VISUAL", "myvisual")
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "desktop-binary"
+    assert spawned == []
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_pdf(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "doc.pdf"
+    target.write_bytes(b"%PDF-1.4\n\x00garbage")
+
+    spawned: list[list[str]] = []
+    captured: list[str] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "desktop-binary"
+    assert spawned == []
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_archive(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "bundle.zip"
+    target.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
+
+    spawned: list[list[str]] = []
+    captured: list[str] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "desktop-binary"
+    assert spawned == []
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_uses_editor_for_markdown(tmp_path: Path, monkeypatch) -> None:
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "README.md"
+    target.write_text("# heading", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "editor"
+    assert spawned == [["vim", str(target)]]
+
+
+def test_F0_4_launch_editor_uses_editor_for_html(tmp_path: Path, monkeypatch) -> None:
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "index.html"
+    target.write_text("<p>hi</p>", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "editor"
+    assert spawned == [["vim", str(target)]]
+
+
+def test_F0_4_launch_editor_uses_editor_for_python(tmp_path: Path, monkeypatch) -> None:
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "script.py"
+    target.write_text("print('hi')\n", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "editor"
+    assert spawned == [["vim", str(target)]]
+
+
+def test_F0_4_launch_editor_classifies_unknown_ext_with_null_bytes_as_binary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Unknown extension + null bytes in body → binary route (skip editor)."""
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "blob.dat"
+    target.write_bytes(b"some bytes\x00more bytes")
+
+    spawned: list[list[str]] = []
+    captured: list[str] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "desktop-binary"
+    assert spawned == []
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_classifies_unknown_ext_text_body_as_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Unknown extension + utf-8 body, no null bytes → text route (use editor)."""
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "notes.weirdext"
+    target.write_text("just text content", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+
+    strategy = launch_editor(target)
+
+    assert strategy == "editor"
+    assert spawned == [["vim", str(target)]]
+
+
+# ---------------------------------------------------------------------------
+# Shift+F3 / Shift+F4 — open in OS-associated app, regardless of file type.
+# ---------------------------------------------------------------------------
+
+
+def test_F0_3_open_external_viewer_calls_desktop_services(tmp_path: Path, monkeypatch) -> None:
+    """Shift+F3 must hand the path to QDesktopServices unconditionally."""
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui import main_window as mw
+
+    target = tmp_path / "README.md"
+    target.write_text("# hi", encoding="utf-8")
+
+    captured: list[str] = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    class _StubPane:
+        def current_path(self) -> Path:
+            return target
+
+    class _StubMainWindow:
+        _active_pane = lambda self: _StubPane()  # noqa: E731
+        _open_external_viewer = mw.MainWindow._open_external_viewer
+
+    _StubMainWindow()._open_external_viewer()
+
+    assert captured == [str(target)]
+
+
+def test_F0_3_open_external_viewer_no_path_is_noop(monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui import main_window as mw
+
+    captured: list[str] = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    class _StubPane:
+        def current_path(self) -> Path | None:
+            return None
+
+    class _StubMainWindow:
+        _active_pane = lambda self: _StubPane()  # noqa: E731
+        _open_external_viewer = mw.MainWindow._open_external_viewer
+
+    _StubMainWindow()._open_external_viewer()
+
+    assert captured == []
+
+
+def test_F0_4_open_with_default_app_skips_editor_chain(tmp_path: Path, monkeypatch) -> None:
+    """Shift+F4 must call QDesktopServices even with $EDITOR set on a text file."""
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui import main_window as mw
+
+    target = tmp_path / "notes.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    spawned: list[list[str]] = []
+    captured: list[str] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            spawned.append(list(args))
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    class _StubPane:
+        def current_path(self) -> Path:
+            return target
+
+    class _StubMainWindow:
+        _active_pane = lambda self: _StubPane()  # noqa: E731
+        _open_with_default_app = mw.MainWindow._open_with_default_app
+
+    _StubMainWindow()._open_with_default_app()
+
+    assert spawned == []
+    assert captured == [str(target)]
+
+
+def test_F0_3_shift_f3_fires_with_terminal_focused() -> None:
+    """Shift+F3 must fire when the terminal QPlainTextEdit has focus (SPEC §16 spike-3)."""
+    from PySide6.QtGui import QShortcut
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMainWindow, QPlainTextEdit
+
+    app = _qapp()
+    window = QMainWindow()
+    fired: list[str] = []
+    QShortcut(QKeySequence("Shift+F3"), window, activated=lambda: fired.append("Shift+F3"))
+    QShortcut(QKeySequence("Shift+F4"), window, activated=lambda: fired.append("Shift+F4"))
+
+    text_edit = QPlainTextEdit()
+    window.setCentralWidget(text_edit)
+    window.show()
+    text_edit.setFocus()
+    app.processEvents()
+
+    QTest.keyClick(text_edit, Qt.Key.Key_F3, Qt.KeyboardModifier.ShiftModifier)
+    QTest.keyClick(text_edit, Qt.Key.Key_F4, Qt.KeyboardModifier.ShiftModifier)
+    app.processEvents()
+
+    assert fired == ["Shift+F3", "Shift+F4"]
+    window.close()
+
+
 def test_F0_3_f_keys_fire_with_qlineedit_focused() -> None:
     """SPEC §16 spike-3: F-keys must fire when path field or terminal has focus.
 

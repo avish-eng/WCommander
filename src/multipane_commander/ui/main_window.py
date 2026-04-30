@@ -46,14 +46,50 @@ from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_
 from multipane_commander.ui.transfer_dialog import TransferDialog
 
 
-def launch_editor(path: Path) -> str:
-    """Launch a text editor for `path` per SPEC §19.5.
+_BINARY_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".ico", ".heic",
+    ".pdf",
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+    ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac", ".ogg", ".m4a", ".webm",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
+    ".sqlite", ".sqlite3", ".db",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".class", ".jar", ".pyc", ".o", ".a",
+})
 
-    Resolution order: $VISUAL, $EDITOR, ``code`` on PATH, then the OS
-    default association via ``QDesktopServices``. Returns the strategy
-    used (``"visual"``, ``"editor"``, ``"code"``, or ``"desktop"``) so
-    callers and tests can verify the path taken.
+
+def _path_is_binary(path: Path) -> bool:
+    """Decide whether ``path`` should be opened by the OS-default app, not a text editor.
+
+    Extension first, then a null-byte sniff on the first 4 KB. Errors fall through
+    to the text path so unreadable files still hit the existing editor chain.
     """
+    if path.suffix.lower() in _BINARY_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as handle:
+            return b"\x00" in handle.read(4096)
+    except OSError:
+        return False
+
+
+def launch_editor(path: Path) -> str:
+    """Launch a text editor (or OS-default for binaries) for ``path`` per SPEC §19.5.
+
+    Routing:
+
+    * Binary files (extension in the binary set, or a null byte in the first 4 KB)
+      skip ``$VISUAL`` / ``$EDITOR`` (they are text editors) and go straight to the
+      OS default association — Preview for images, the system PDF viewer, etc.
+      Returns ``"desktop-binary"``.
+    * Text-like files use the legacy chain: ``$VISUAL``, ``$EDITOR``, ``code`` on
+      PATH, then ``QDesktopServices``. Returns ``"visual"``, ``"editor"``, ``"code"``,
+      or ``"desktop"`` so callers and tests can verify the path taken.
+    """
+    if _path_is_binary(path):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        return "desktop-binary"
     for env_var, label in (("VISUAL", "visual"), ("EDITOR", "editor")):
         value = os.environ.get(env_var)
         if value:
@@ -258,6 +294,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F2), self, activated=self._rename_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F3), self, activated=self._toggle_passive_quick_view)
         QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
+        QShortcut(QKeySequence("Shift+F3"), self, activated=self._open_external_viewer)
+        QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
@@ -530,6 +568,18 @@ class MainWindow(QMainWindow):
         if path is None:
             return
         launch_editor(path)
+
+    def _open_external_viewer(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_with_default_app(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _show_main_menu(self) -> None:
         menu = self._build_main_menu()
