@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - (P1 #12) `Shift+F8` and `Shift+Del` permanently delete (bypass Recycle Bin). Confirmation prompt is more emphatic than the trash flow. `LocalFileSystem.delete_entry` gains a `bypass_trash` keyword and `FileJobAction` carries the flag through.
 - (P2 #16) `Alt+1`..`Alt+6` snap to layout presets — Default, Focus Files, Focus Terminal, Terminal Right, Terminal Left, Balanced — wiring the existing preset handlers to keyboard shortcuts (previously menu-only). SPEC §5.3 calls for `Alt+1..Alt+8`; we bind the six presets actually implemented today and reserve 7/8 for future presets.
+- (P2 #14) `Ctrl+Enter` / `Ctrl+Return` pastes the cursor item's name into the terminal input; `Alt+Enter` / `Alt+Return` pastes the full path. The terminal dock is revealed and focused if hidden. Names with spaces or shell metacharacters are double-quoted defensively.
 
 ### Verified
 

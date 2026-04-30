@@ -277,6 +277,10 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Alt+4"), self, activated=self._apply_terminal_right_layout)
         QShortcut(QKeySequence("Alt+5"), self, activated=self._apply_terminal_left_layout)
         QShortcut(QKeySequence("Alt+6"), self, activated=self._apply_balanced_layout)
+        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._paste_active_filename_to_terminal)
+        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._paste_active_filename_to_terminal)
+        QShortcut(QKeySequence("Alt+Return"), self, activated=self._paste_active_full_path_to_terminal)
+        QShortcut(QKeySequence("Alt+Enter"), self, activated=self._paste_active_full_path_to_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1254,6 +1258,31 @@ class MainWindow(QMainWindow):
 
     def _delete_from_active_pane_permanent(self) -> None:
         self._delete_from_active_pane(bypass_trash=True)
+
+    def _paste_active_filename_to_terminal(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        self._inject_into_terminal(self._shell_quote(path.name))
+
+    def _paste_active_full_path_to_terminal(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        self._inject_into_terminal(self._shell_quote(str(path)))
+
+    def _inject_into_terminal(self, text: str) -> None:
+        if not self.terminal_dock.isVisible():
+            self.terminal_dock.setVisible(True)
+        self.terminal_dock.focus_input()
+        self.terminal_dock.output.inject_command(text + " ", run=False)
+
+    @staticmethod
+    def _shell_quote(text: str) -> str:
+        if any(ch.isspace() for ch in text) or any(ch in text for ch in '"\'\\$`!&|;<>(){}[]*?'):
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        return text
 
     def _confirm_overwrite(self, destination_path: Path) -> bool:
         return ask_confirmation(

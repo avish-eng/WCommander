@@ -242,6 +242,21 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F2_14_shell_quote_passthrough_for_simple_names() -> None:
+    from multipane_commander.ui.main_window import MainWindow
+
+    assert MainWindow._shell_quote("simple.txt") == "simple.txt"
+    assert MainWindow._shell_quote("alpha-beta_v1.0") == "alpha-beta_v1.0"
+
+
+def test_F2_14_shell_quote_wraps_paths_with_spaces_or_specials() -> None:
+    from multipane_commander.ui.main_window import MainWindow
+
+    assert MainWindow._shell_quote("a b.txt") == '"a b.txt"'
+    assert MainWindow._shell_quote('quote"in"name') == '"quote\\"in\\"name"'
+    assert MainWindow._shell_quote("with$dollar") == '"with$dollar"'
+
+
 def test_F1_12_local_fs_delete_bypass_trash_unlinks_file(tmp_path: Path) -> None:
     from multipane_commander.services.fs.local_fs import LocalFileSystem
 
