@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- (P0 #1) Up/Down/PgUp/PgDn/Home/End now move the cursor in file panes. `PaneView` was accepting focus on the container instead of routing it to the inner `QTreeWidget`, so arrow keys hit the QFrame default and never reached the list. Fixed by setting `setFocusProxy(self.file_list)`.
+
 ### Tests
 
 - Added `tests/test_keyboard_shortcuts.py` — regression suite (R1–R13) covering F2 / Shift+F6 rename, F6/F7/F8/Delete operations, Backspace navigation, Insert/Space selection toggle (with TC-style cursor advance), Esc clear-marks, Ctrl+A mark-all, Ctrl+R refresh, Enter on directory / parent row.

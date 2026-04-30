@@ -102,6 +102,10 @@ class PaneView(QFrame):
         self.setObjectName("pane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Route any focus targeted at the pane container to the inner file
+        # list so keyboard navigation (Up/Down/PgUp/PgDn/Home/End) reaches
+        # the QTreeWidget that actually understands those keys.
+        self.setFocusProxy(self.file_list)
         self.set_active(active)
 
         layout = QVBoxLayout(self)

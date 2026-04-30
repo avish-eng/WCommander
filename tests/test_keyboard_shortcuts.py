@@ -261,6 +261,64 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Feature tests — new bindings added in this PR.
+# ---------------------------------------------------------------------------
+
+
+def test_F0_1_pane_proxies_focus_to_file_list(tmp_path: Path) -> None:
+    pane = _make_pane(tmp_path)
+
+    assert pane.focusProxy() is pane.file_list
+
+
+def test_F0_1_down_arrow_advances_cursor(tmp_path: Path) -> None:
+    file_a, _file_b, _sub = _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    _set_cursor_to(pane, file_a)
+
+    pane.file_list.keyPressEvent(_key_event(Qt.Key.Key_Down))
+
+    new_cursor = pane.file_list.currentItem()
+    assert new_cursor is not None
+    assert new_cursor.data(0, Qt.ItemDataRole.UserRole) != file_a
+
+
+def test_F0_1_up_arrow_retreats_cursor(tmp_path: Path) -> None:
+    _file_a, file_b, _sub = _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    _set_cursor_to(pane, file_b)
+
+    pane.file_list.keyPressEvent(_key_event(Qt.Key.Key_Up))
+
+    new_cursor = pane.file_list.currentItem()
+    assert new_cursor is not None
+    assert new_cursor.data(0, Qt.ItemDataRole.UserRole) != file_b
+
+
+def test_F0_1_home_jumps_to_first(tmp_path: Path) -> None:
+    _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    last_row = pane.file_list.topLevelItem(pane.file_list.topLevelItemCount() - 1)
+    pane.file_list.setCurrentItem(last_row)
+
+    pane.file_list.keyPressEvent(_key_event(Qt.Key.Key_Home))
+
+    assert pane.file_list.currentItem() is pane.file_list.topLevelItem(0)
+
+
+def test_F0_1_end_jumps_to_last(tmp_path: Path) -> None:
+    _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
+
+    pane.file_list.keyPressEvent(_key_event(Qt.Key.Key_End))
+
+    assert pane.file_list.currentItem() is pane.file_list.topLevelItem(
+        pane.file_list.topLevelItemCount() - 1
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helper assertion: confirm the population helper itself is right
 # (so failures above can be attributed to handlers, not test scaffolding).
 # ---------------------------------------------------------------------------
