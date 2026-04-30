@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import QEvent, Qt, QUrl
+from PySide6.QtGui import QFont, QKeyEvent, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtPdf import QPdfDocument
@@ -13,12 +13,15 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSlider,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -29,6 +32,14 @@ from pygments.lexer import Lexer
 from pygments.lexers import get_lexer_for_filename
 from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
+
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+
+    _WEB_ENGINE_AVAILABLE = True
+except ImportError:  # pragma: no cover - environment-dependent
+    QWebEngineView = None  # type: ignore[assignment, misc]
+    _WEB_ENGINE_AVAILABLE = False
 
 
 _IMAGE_SUFFIXES = {
@@ -44,6 +55,10 @@ _ARCHIVE_ENTRY_CAP = 1000
 
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".flv"}
 _AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".aiff"}
+
+_CSV_SUFFIXES = {".csv", ".tsv"}
+_CSV_ROW_CAP = 1000
+_CSV_COL_CAP = 100
 
 
 def _is_archive_path(path: Path) -> bool:
@@ -168,6 +183,13 @@ class QuickViewWidget(QFrame):
         hex_font.setPointSize(10)
         self.hex_view.setFont(hex_font)
 
+        self.csv_view = QTableWidget()
+        self.csv_view.setObjectName("quickViewCsv")
+        self.csv_view.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.csv_view.horizontalHeader().setStretchLastSection(False)
+        self.csv_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.csv_view.verticalHeader().setVisible(True)
+
         self.archive_view = QPlainTextEdit()
         self.archive_view.setObjectName("quickViewArchive")
         self.archive_view.setReadOnly(True)
@@ -175,6 +197,14 @@ class QuickViewWidget(QFrame):
         archive_font.setStyleHint(QFont.StyleHint.Monospace)
         archive_font.setPointSize(10)
         self.archive_view.setFont(archive_font)
+
+        self.raw_text_view = QPlainTextEdit()
+        self.raw_text_view.setObjectName("quickViewRawText")
+        self.raw_text_view.setReadOnly(True)
+        raw_font = QFont("Menlo")
+        raw_font.setStyleHint(QFont.StyleHint.Monospace)
+        raw_font.setPointSize(10)
+        self.raw_text_view.setFont(raw_font)
 
         self.media_view = QWidget()
         self.media_view.setObjectName("quickViewMedia")
@@ -214,13 +244,41 @@ class QuickViewWidget(QFrame):
         self.stack.addWidget(self.hex_view)
         self.stack.addWidget(self.archive_view)
         self.stack.addWidget(self.media_view)
+        self.stack.addWidget(self.csv_view)
+        self.stack.addWidget(self.raw_text_view)
+
+        self.raw_button = QPushButton("Raw")
+        self.raw_button.setObjectName("quickViewRawToggle")
+        self.raw_button.setCheckable(True)
+        self.raw_button.setVisible(False)
+        self.raw_button.setToolTip("Toggle rendered ↔ raw source (Tab)")
+        self.raw_button.toggled.connect(self._on_raw_toggled)
+
+        self.web_button = QPushButton("Web")
+        self.web_button.setObjectName("quickViewWebToggle")
+        self.web_button.setCheckable(True)
+        self.web_button.setVisible(False)
+        self.web_button.setEnabled(_WEB_ENGINE_AVAILABLE)
+        self.web_button.setToolTip("Render HTML with full Chromium engine")
+        self.web_button.toggled.connect(self._on_web_toggled)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.addWidget(self.title_label)
         header_row.addWidget(self.title_meta_label)
         header_row.addStretch(1)
+        header_row.addWidget(self.web_button)
+        header_row.addWidget(self.raw_button)
         header_row.addWidget(self.size_picker)
+
+        for view in (
+            self.markdown_view,
+            self.html_view,
+            self.code_view,
+            self.csv_view,
+            self.raw_text_view,
+        ):
+            view.installEventFilter(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -230,6 +288,10 @@ class QuickViewWidget(QFrame):
         layout.addWidget(self.stack, 1)
 
         self._current_pixmap: QPixmap | None = None
+        self._raw_source: str | None = None
+        self._rich_widget: QWidget | None = None
+        self._web_view: "QWebEngineView | None" = None
+        self._current_html_path: Path | None = None
         self._apply_size_preset(self.size_picker.currentText())
 
     def current_size_preset(self) -> str:
@@ -245,6 +307,9 @@ class QuickViewWidget(QFrame):
         # doesn't keep playing when the user navigates to a different file.
         if self.stack.currentWidget() is self.media_view:
             self.media_player.stop()
+
+        # Clear raw-toggle state by default; rich-renderer branches re-arm it.
+        self._clear_raw_state()
 
         if path is None:
             self.title_label.setText("Quick View")
@@ -340,16 +405,29 @@ class QuickViewWidget(QFrame):
             return
 
         if suffix in _MARKDOWN_SUFFIXES and b"\x00" not in raw:
+            text = raw.decode("utf-8", errors="replace")
             self.meta_label.setText("Markdown")
-            self.markdown_view.setMarkdown(raw.decode("utf-8", errors="replace"))
-            self.stack.setCurrentWidget(self.markdown_view)
+            self.markdown_view.setMarkdown(text)
+            self._show_with_raw_toggle(self.markdown_view, text)
             return
 
         if suffix in _HTML_SUFFIXES and b"\x00" not in raw:
+            text = raw.decode("utf-8", errors="replace")
             self.meta_label.setText("HTML")
-            self.html_view.setHtml(raw.decode("utf-8", errors="replace"))
-            self.stack.setCurrentWidget(self.html_view)
+            self.html_view.setHtml(text)
+            self._current_html_path = path
+            self.web_button.setVisible(_WEB_ENGINE_AVAILABLE)
+            rich = self._resolve_html_rich_widget(text, path)
+            self._show_with_raw_toggle(rich, text)
             return
+
+        if suffix in _CSV_SUFFIXES and b"\x00" not in raw:
+            text = raw[:80_000].decode("utf-8", errors="replace")
+            if text.strip():
+                self._populate_csv_view(text, suffix)
+                self._show_with_raw_toggle(self.csv_view, text)
+                return
+            # Empty CSV — fall through to text view, which will render as blank.
 
         if b"\x00" not in raw:
             text = raw[:80_000].decode("utf-8", errors="replace")
@@ -359,7 +437,7 @@ class QuickViewWidget(QFrame):
                 rendered = highlight(text, lexer, formatter)
                 self.meta_label.setText(f"{lexer.name} source")
                 self.code_view.setHtml(rendered)
-                self.stack.setCurrentWidget(self.code_view)
+                self._show_with_raw_toggle(self.code_view, text)
                 return
             self.meta_label.setText("Text file")
             self.text_preview.setPlainText(text)
@@ -396,6 +474,41 @@ class QuickViewWidget(QFrame):
         self.text_preview.setFont(font)
         self._update_scaled_pixmap()
 
+    def _populate_csv_view(self, text: str, suffix: str) -> None:
+        import csv
+        import io
+
+        delimiter = "\t" if suffix == ".tsv" else ","
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        rows: list[list[str]] = []
+        total_rows = 0
+        header: list[str] = []
+        for index, row in enumerate(reader):
+            if index == 0:
+                header = row[:_CSV_COL_CAP]
+                continue
+            total_rows += 1
+            if len(rows) < _CSV_ROW_CAP:
+                rows.append(row[:_CSV_COL_CAP])
+        col_count = len(header) if header else (max((len(r) for r in rows), default=0))
+        self.csv_view.clear()
+        self.csv_view.setColumnCount(col_count)
+        self.csv_view.setRowCount(len(rows))
+        if header:
+            self.csv_view.setHorizontalHeaderLabels(header[:col_count])
+        for row_idx, row in enumerate(rows):
+            for col_idx in range(col_count):
+                cell = row[col_idx] if col_idx < len(row) else ""
+                self.csv_view.setItem(row_idx, col_idx, QTableWidgetItem(cell))
+        self.csv_view.resizeColumnsToContents()
+        kind = "TSV" if suffix == ".tsv" else "CSV"
+        if total_rows > len(rows):
+            self.meta_label.setText(
+                f"{kind} • {total_rows:,} rows ({total_rows - len(rows):,} more not shown)"
+            )
+        else:
+            self.meta_label.setText(f"{kind} • {total_rows:,} rows")
+
     def _toggle_media_playback(self) -> None:
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
@@ -413,3 +526,74 @@ class QuickViewWidget(QFrame):
 
     def _on_media_duration_changed(self, duration: int) -> None:
         self.media_seek_slider.setRange(0, max(0, duration))
+
+    def _clear_raw_state(self) -> None:
+        # Hide the toggle and forget the source/widget pair, but keep the
+        # checked state so the user's preference persists across files.
+        self._raw_source = None
+        self._rich_widget = None
+        self._current_html_path = None
+        self.raw_button.setVisible(False)
+        self.web_button.setVisible(False)
+
+    def _ensure_web_view(self) -> "QWebEngineView | None":
+        if not _WEB_ENGINE_AVAILABLE:
+            return None
+        if self._web_view is None:
+            assert QWebEngineView is not None
+            view = QWebEngineView()
+            view.setObjectName("quickViewWebEngine")
+            self.stack.addWidget(view)
+            view.installEventFilter(self)
+            self._web_view = view
+        return self._web_view
+
+    def _resolve_html_rich_widget(self, text: str, path: Path) -> QWidget:
+        if self.web_button.isChecked():
+            web = self._ensure_web_view()
+            if web is not None:
+                base_url = QUrl.fromLocalFile(str(path.parent) + "/")
+                web.setHtml(text, base_url)
+                return web
+        return self.html_view
+
+    def _on_web_toggled(self, checked: bool) -> None:
+        # When the web toggle flips on an HTML file, swap the rich widget
+        # between QTextBrowser and QWebEngineView (re-routing through the
+        # raw toggle so user preference is preserved).
+        if self._current_html_path is None or self._raw_source is None:
+            return
+        rich = self._resolve_html_rich_widget(self._raw_source, self._current_html_path)
+        self._rich_widget = rich
+        if not self.raw_button.isChecked():
+            self.stack.setCurrentWidget(rich)
+
+    def _show_with_raw_toggle(self, rich_widget: QWidget, raw_source: str) -> None:
+        self._rich_widget = rich_widget
+        self._raw_source = raw_source
+        self.raw_button.setVisible(True)
+        if self.raw_button.isChecked():
+            self.raw_text_view.setPlainText(raw_source)
+            self.stack.setCurrentWidget(self.raw_text_view)
+        else:
+            self.stack.setCurrentWidget(rich_widget)
+
+    def _on_raw_toggled(self, checked: bool) -> None:
+        if self._rich_widget is None or self._raw_source is None:
+            return
+        if checked:
+            self.raw_text_view.setPlainText(self._raw_source)
+            self.stack.setCurrentWidget(self.raw_text_view)
+        else:
+            self.stack.setCurrentWidget(self._rich_widget)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        if event.type() == QEvent.Type.KeyPress:
+            assert isinstance(event, QKeyEvent)
+            # `isHidden()` reflects the explicit setVisible(False) call,
+            # independent of whether the parent widget chain is shown
+            # (which matters for offscreen tests).
+            if event.key() == Qt.Key.Key_Tab and not self.raw_button.isHidden():
+                self.raw_button.toggle()
+                return True
+        return super().eventFilter(obj, event)

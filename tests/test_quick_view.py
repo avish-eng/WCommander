@@ -686,6 +686,59 @@ def test_F0_3_quick_view_leaving_media_stops_playback(tmp_path: Path) -> None:
     assert view.media_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
 
 
+def test_F0_3_quick_view_renders_csv_as_table(tmp_path: Path) -> None:
+    target = tmp_path / "data.csv"
+    target.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.csv_view
+    assert view.csv_view.columnCount() == 3
+    assert view.csv_view.rowCount() == 2  # header excluded — it's in horizontalHeader
+    assert view.csv_view.horizontalHeaderItem(0).text() == "name"
+    assert view.csv_view.horizontalHeaderItem(2).text() == "city"
+    assert view.csv_view.item(0, 0).text() == "Alice"
+    assert view.csv_view.item(1, 2).text() == "LA"
+    assert "CSV" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_csv_handles_quoted_commas(tmp_path: Path) -> None:
+    target = tmp_path / "addresses.csv"
+    target.write_text('name,address\n"Alice","123 Main St, Apt 4"\n', encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.csv_view
+    assert view.csv_view.item(0, 0).text() == "Alice"
+    assert view.csv_view.item(0, 1).text() == "123 Main St, Apt 4"
+
+
+def test_F0_3_quick_view_csv_caps_rows(tmp_path: Path) -> None:
+    target = tmp_path / "huge.csv"
+    lines = ["id,value"] + [f"{i},val{i}" for i in range(2500)]
+    target.write_text("\n".join(lines), encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.csv_view
+    assert view.csv_view.rowCount() <= 1000  # cap
+    assert "more" in view.meta_label.text().lower()
+
+
+def test_F0_3_quick_view_handles_empty_csv(tmp_path: Path) -> None:
+    target = tmp_path / "empty.csv"
+    target.write_text("", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    # Empty CSV should not crash; fall through to text view or empty placeholder.
+    assert view.stack.currentWidget() in (view.csv_view, view.text_preview, view.empty_label)
+
+
 def test_F0_3_quick_view_caps_archive_entries(tmp_path: Path) -> None:
     """Archives with thousands of entries must render within the cap."""
     import zipfile
@@ -747,3 +800,291 @@ def test_F0_3_quick_view_hex_view_renders_printable_column(tmp_path: Path) -> No
     body = view.hex_view.toPlainText()
     # Printable ASCII column on the first row.
     assert "ABCDEFGHIJKLMNOP" in body
+
+
+# --- Raw toggle (Tab / button) ------------------------------------------------
+
+
+def test_F0_3_raw_toggle_visible_for_markdown(tmp_path: Path) -> None:
+    target = tmp_path / "doc.md"
+    target.write_text("# Heading\n\nbody\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.raw_button.isHidden() is False
+    assert view.raw_button.isChecked() is False
+    assert view.stack.currentWidget() is view.markdown_view
+
+
+def test_F0_3_raw_toggle_swaps_to_raw_text_for_markdown(tmp_path: Path) -> None:
+    body = "# Title\n\nHello **world**.\n"
+    target = tmp_path / "doc.md"
+    target.write_text(body, encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    view.raw_button.toggle()  # turn ON
+    assert view.raw_button.isChecked()
+    assert view.stack.currentWidget() is view.raw_text_view
+    assert view.raw_text_view.toPlainText() == body
+
+    view.raw_button.toggle()  # turn OFF
+    assert view.raw_button.isChecked() is False
+    assert view.stack.currentWidget() is view.markdown_view
+
+
+def test_F0_3_raw_toggle_swaps_to_raw_text_for_html(tmp_path: Path) -> None:
+    body = "<h1>Hi</h1>\n<p>body</p>\n"
+    target = tmp_path / "page.html"
+    target.write_text(body, encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    view.raw_button.toggle()
+
+    assert view.stack.currentWidget() is view.raw_text_view
+    assert view.raw_text_view.toPlainText() == body
+
+
+def test_F0_3_raw_toggle_swaps_to_raw_source_for_code(tmp_path: Path) -> None:
+    body = "def foo():\n    return 42\n"
+    target = tmp_path / "script.py"
+    target.write_text(body, encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    view.raw_button.toggle()
+
+    assert view.stack.currentWidget() is view.raw_text_view
+    # Raw view shows un-highlighted source — exact bytes, no <span> tags.
+    assert view.raw_text_view.toPlainText() == body
+    assert "<span" not in view.raw_text_view.toPlainText()
+
+
+def test_F0_3_raw_toggle_swaps_to_raw_text_for_csv(tmp_path: Path) -> None:
+    body = "name,age\nAlice,30\nBob,25\n"
+    target = tmp_path / "data.csv"
+    target.write_text(body, encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    view.raw_button.toggle()
+
+    assert view.stack.currentWidget() is view.raw_text_view
+    assert view.raw_text_view.toPlainText() == body
+
+
+def test_F0_3_raw_toggle_hidden_for_image(tmp_path: Path) -> None:
+    target = tmp_path / "pic.png"
+    _make_png(target)
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.raw_button.isHidden() is True
+
+
+def test_F0_3_raw_toggle_hidden_for_plain_text(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("plain text", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.raw_button.isHidden() is True
+
+
+def test_F0_3_raw_toggle_hidden_for_hex(tmp_path: Path) -> None:
+    target = tmp_path / "blob.bin"
+    target.write_bytes(b"ABC\x00DEF")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.hex_view
+    assert view.raw_button.isHidden() is True
+
+
+def test_F0_3_raw_toggle_hidden_for_directory(tmp_path: Path) -> None:
+    view = _make_widget()
+    view.show_path(tmp_path)
+
+    assert view.raw_button.isHidden() is True
+
+
+def test_F0_3_raw_toggle_hides_button_when_switching_to_non_rich(tmp_path: Path) -> None:
+    """When switching to a file the toggle doesn't apply to, the button hides.
+
+    The toggle's checked state is intentionally preserved (user preference
+    persists across files); only the button visibility tracks applicability.
+    """
+    md = tmp_path / "doc.md"
+    md.write_text("# hi", encoding="utf-8")
+    txt = tmp_path / "notes.txt"
+    txt.write_text("plain", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(md)
+    view.raw_button.toggle()
+    assert view.raw_button.isChecked()
+
+    view.show_path(txt)
+    assert view.raw_button.isHidden() is True
+    # Plain-text view shown (not the raw view), since the toggle doesn't apply.
+    assert view.stack.currentWidget() is view.text_preview
+
+
+def test_F0_3_raw_toggle_persists_state_when_switching_between_rich_files(
+    tmp_path: Path,
+) -> None:
+    """If the user toggled Raw on, switching to another rich file keeps it on."""
+    md1 = tmp_path / "a.md"
+    md1.write_text("# one", encoding="utf-8")
+    md2 = tmp_path / "b.md"
+    md2.write_text("# two", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(md1)
+    view.raw_button.toggle()
+    assert view.stack.currentWidget() is view.raw_text_view
+
+    view.show_path(md2)
+    # Raw mode persists; new file shown raw.
+    assert view.raw_button.isChecked()
+    assert view.stack.currentWidget() is view.raw_text_view
+    assert view.raw_text_view.toPlainText() == "# two"
+
+
+def test_F0_3_raw_toggle_via_tab_key_on_markdown_view(tmp_path: Path) -> None:
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    target = tmp_path / "doc.md"
+    target.write_text("# Heading", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    assert view.stack.currentWidget() is view.markdown_view
+
+    tab_press = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(view.markdown_view, tab_press)
+
+    assert view.raw_button.isChecked()
+    assert view.stack.currentWidget() is view.raw_text_view
+
+
+def test_F0_3_raw_toggle_via_tab_key_on_raw_view_returns_to_rich(tmp_path: Path) -> None:
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    target = tmp_path / "doc.md"
+    target.write_text("# Heading", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    view.raw_button.toggle()
+    assert view.stack.currentWidget() is view.raw_text_view
+
+    tab_press = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(view.raw_text_view, tab_press)
+
+    assert view.raw_button.isChecked() is False
+    assert view.stack.currentWidget() is view.markdown_view
+
+
+# --- WebEngine HTML rendering -------------------------------------------------
+
+
+def test_F0_3_web_button_visible_only_for_html(tmp_path: Path) -> None:
+    md = tmp_path / "doc.md"
+    md.write_text("# md", encoding="utf-8")
+    html = tmp_path / "page.html"
+    html.write_text("<h1>html</h1>", encoding="utf-8")
+
+    view = _make_widget()
+
+    view.show_path(md)
+    assert view.web_button.isHidden() is True
+
+    view.show_path(html)
+    assert view.web_button.isHidden() is False
+
+
+def test_F0_3_web_toggle_routes_html_to_web_view(tmp_path: Path) -> None:
+    target = tmp_path / "page.html"
+    target.write_text("<h1>Hello</h1>", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    assert view.stack.currentWidget() is view.html_view
+
+    view.web_button.toggle()
+    web_view = view._web_view
+    assert web_view is not None
+    assert view.stack.currentWidget() is web_view
+
+
+def test_F0_3_web_toggle_off_returns_to_text_browser(tmp_path: Path) -> None:
+    target = tmp_path / "page.html"
+    target.write_text("<h1>Hello</h1>", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+    view.web_button.toggle()
+    assert view.stack.currentWidget() is view._web_view
+
+    view.web_button.toggle()
+    assert view.stack.currentWidget() is view.html_view
+
+
+def test_F0_3_web_and_raw_compose_raw_wins(tmp_path: Path) -> None:
+    """When both Web and Raw are toggled on, Raw view takes precedence."""
+    body = "<h1>Hello</h1>"
+    target = tmp_path / "page.html"
+    target.write_text(body, encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    view.web_button.toggle()  # rich = web
+    view.raw_button.toggle()  # raw on top
+    assert view.stack.currentWidget() is view.raw_text_view
+    assert view.raw_text_view.toPlainText() == body
+
+    # Untoggle raw → back to rich (which is web).
+    view.raw_button.toggle()
+    assert view.stack.currentWidget() is view._web_view
+
+
+def test_F0_3_web_button_hides_when_switching_to_non_html(tmp_path: Path) -> None:
+    html = tmp_path / "page.html"
+    html.write_text("<h1>html</h1>", encoding="utf-8")
+    md = tmp_path / "doc.md"
+    md.write_text("# md", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(html)
+    view.web_button.toggle()
+    assert view.web_button.isChecked()
+
+    view.show_path(md)
+    assert view.web_button.isHidden() is True
+    # Markdown stays on its own rich widget; web preference is irrelevant.
+    assert view.stack.currentWidget() is view.markdown_view
+
+
+def test_F0_3_web_view_lazy_creation(tmp_path: Path) -> None:
+    """The QWebEngineView is only created when the user toggles Web on."""
+    target = tmp_path / "page.html"
+    target.write_text("<h1>Hello</h1>", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    # Showing an HTML file should NOT spin up Chromium.
+    assert view._web_view is None
+
+    view.web_button.toggle()
+    assert view._web_view is not None
