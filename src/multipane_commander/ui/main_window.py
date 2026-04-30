@@ -27,7 +27,7 @@ from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
-from multipane_commander.platform import same_filesystem
+from multipane_commander.platform import root_paths, root_section_label, same_filesystem
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
@@ -281,6 +281,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._paste_active_filename_to_terminal)
         QShortcut(QKeySequence("Alt+Return"), self, activated=self._paste_active_full_path_to_terminal)
         QShortcut(QKeySequence("Alt+Enter"), self, activated=self._paste_active_full_path_to_terminal)
+        QShortcut(QKeySequence("Alt+F1"), self, activated=self._show_drive_menu_for_active_pane)
+        QShortcut(QKeySequence("Alt+F2"), self, activated=self._show_drive_menu_for_passive_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1258,6 +1260,24 @@ class MainWindow(QMainWindow):
 
     def _delete_from_active_pane_permanent(self) -> None:
         self._delete_from_active_pane(bypass_trash=True)
+
+    def _show_drive_menu_for_active_pane(self) -> None:
+        self._show_drive_menu(self._active_pane())
+
+    def _show_drive_menu_for_passive_pane(self) -> None:
+        self._show_drive_menu(self._passive_pane())
+
+    def _show_drive_menu(self, target_pane: PaneView) -> None:
+        menu = QMenu(self)
+        menu.setTitle(root_section_label())
+        for path in root_paths():
+            label = str(path)
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, p=path, pane=target_pane: pane.navigate_to(p))
+            menu.addAction(action)
+        if not menu.actions():
+            return
+        menu.exec(QCursor.pos())
 
     def _paste_active_filename_to_terminal(self) -> None:
         path = self._active_pane().current_path()
