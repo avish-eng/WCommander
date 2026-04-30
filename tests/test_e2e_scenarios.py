@@ -390,6 +390,179 @@ def test_e2e_alt_f7_opens_find_dialog_and_search_finds_match(tmp_path: Path, mon
     _close_window(window)
 
 
+def test_e2e_enter_on_zip_browses_contents(tmp_path: Path) -> None:
+    import zipfile
+
+    left, right = _setup_split(tmp_path)
+    archive = left / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("alpha.txt", b"a")
+        zf.writestr("beta.txt", b"bb")
+        zf.writestr("sub/inner.txt", b"i")
+
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    item = _row_for_path(pane, archive)
+    pane.file_list.setCurrentItem(item)
+
+    # Activate (Enter) on the zip — exercises the same code path itemActivated does.
+    pane._activate_item(item)
+    QApplication.processEvents()
+
+    # Pane is now "inside" the archive — listing should show its entries.
+    assert pane.active_tab.path == archive
+    names: list[str] = []
+    for row in range(pane.file_list.topLevelItemCount()):
+        names.append(pane.file_list.topLevelItem(row).text(0))
+    assert ".." in names
+    assert "alpha.txt" in names
+    assert "beta.txt" in names
+    assert "sub" in names
+
+    # Backspace at archive root returns to the parent directory.
+    pane.navigate_to(pane.active_tab.path.parent)
+    QApplication.processEvents()
+    assert pane.active_tab.path == left
+
+    _close_window(window)
+
+
+def test_e2e_enter_zip_subdir_then_parent_returns_to_root(tmp_path: Path) -> None:
+    import zipfile
+
+    left, right = _setup_split(tmp_path)
+    archive = left / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("sub/inner.txt", b"i")
+
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane._activate_item(_row_for_path(pane, archive))
+    QApplication.processEvents()
+
+    # Step into the subdirectory.
+    pane._activate_item(_row_for_path(pane, archive / "sub"))
+    QApplication.processEvents()
+    assert pane.active_tab.path == archive / "sub"
+
+    # Parent navigation from a subdirectory inside the archive → back to archive root.
+    pane.navigate_to(pane.active_tab.path.parent)
+    QApplication.processEvents()
+    assert pane.active_tab.path == archive
+
+    _close_window(window)
+
+
+def test_e2e_f5_extracts_file_from_zip_to_passive_pane(tmp_path: Path, monkeypatch) -> None:
+    import zipfile
+
+    left, right = _setup_split(tmp_path)
+    archive = left / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("payload.txt", b"unzipped-content")
+
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane._activate_item(_row_for_path(pane, archive))
+    QApplication.processEvents()
+
+    # Mark the inner file so the transfer picks it up.
+    pane.marked_paths = {archive / "payload.txt"}
+
+    class FakeTransferDialog:
+        DialogCode = type("DC", (), {"Accepted": 1, "Rejected": 0})
+
+        def __init__(self, *_args, **kwargs) -> None:
+            self._sources = kwargs.get("source_paths") or []
+            self._destination = kwargs.get("default_destination")
+
+        def exec(self) -> int:
+            return self.DialogCode.Accepted
+
+        def destination_directory(self):
+            return self._destination
+
+        def conflict_policy(self) -> str:
+            return "overwrite"
+
+        def selected_actions(self):
+            return self._sources
+
+    monkeypatch.setattr("multipane_commander.ui.main_window.TransferDialog", FakeTransferDialog)
+
+    window._copy_from_active_pane()
+    _wait_for_jobs(window)
+
+    extracted = right / "payload.txt"
+    assert extracted.exists()
+    assert extracted.read_bytes() == b"unzipped-content"
+    # Source archive untouched (read-only).
+    assert archive.exists()
+    _close_window(window)
+
+
+def test_e2e_f3_quick_view_on_file_inside_zip(tmp_path: Path) -> None:
+    import zipfile
+
+    left, right = _setup_split(tmp_path)
+    archive = left / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("readme.txt", b"hello from inside")
+
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    pane._activate_item(_row_for_path(pane, archive))
+    QApplication.processEvents()
+
+    # Cursor on the inner file → trigger quick view.
+    inner_item = _row_for_path(pane, archive / "readme.txt")
+    pane.file_list.setCurrentItem(inner_item)
+    QApplication.processEvents()
+
+    window._show_passive_quick_view()
+    QApplication.processEvents()
+
+    quick_view = window.pane_views[1].quick_view
+    # The text-preview branch should have rendered the extracted contents.
+    assert "hello from inside" in quick_view.text_preview.toPlainText()
+    # Title still reflects the virtual file name (not the temp path).
+    assert quick_view.title_label.text() == "readme.txt"
+
+    _close_window(window)
+
+
+def test_e2e_pane_uses_archive_fs_when_inside_archive(tmp_path: Path) -> None:
+    """Sanity check: the pane swaps to ArchiveFileSystem inside, LocalFileSystem outside."""
+    import zipfile
+
+    from multipane_commander.services.fs.archive_fs import ArchiveFileSystem
+    from multipane_commander.services.fs.local_fs import LocalFileSystem
+
+    left, right = _setup_split(tmp_path)
+    archive = left / "bundle.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("alpha.txt", b"a")
+
+    window = _make_main_window(left, right)
+    pane = window.pane_views[0]
+    pane.refresh()
+    assert isinstance(pane.fs, LocalFileSystem)
+
+    pane._activate_item(_row_for_path(pane, archive))
+    QApplication.processEvents()
+    assert isinstance(pane.fs, ArchiveFileSystem)
+
+    pane.navigate_to(left)
+    QApplication.processEvents()
+    assert isinstance(pane.fs, LocalFileSystem)
+
+    _close_window(window)
+
+
 def test_e2e_ctrl_shift_r_toggles_quick_view_raw_mode(tmp_path: Path) -> None:
     left, right = _setup_split(tmp_path)
     md = left / "doc.md"

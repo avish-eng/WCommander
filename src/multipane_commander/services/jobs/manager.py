@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multipane_commander.services.fs.archive_fs import ArchiveFileSystem, inside_archive
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult, FileJobSnapshot
 
@@ -27,6 +28,7 @@ class _FileJobWorker(QObject):
         super().__init__()
         self.actions = actions
         self.fs = LocalFileSystem()
+        self.archive_fs = ArchiveFileSystem()
         self.cancel_requested = False
 
     def cancel(self) -> None:
@@ -63,7 +65,16 @@ class _FileJobWorker(QObject):
                         )
                         continue
 
-                    if action.replace_existing and action.destination.exists():
+                    src_in_archive = inside_archive(action.source) is not None
+                    if src_in_archive:
+                        if action.operation == "move":
+                            raise RuntimeError(
+                                "Move from archive is read-only; use copy (F5) instead"
+                            )
+                        self.archive_fs.extract_entry_to(
+                            action.source, action.destination
+                        )
+                    elif action.replace_existing and action.destination.exists():
                         self.fs.replace_entry(
                             action.source,
                             action.destination,

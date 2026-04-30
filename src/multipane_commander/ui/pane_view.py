@@ -30,6 +30,11 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.state.model import PaneState, TabState
+from multipane_commander.services.fs.archive_fs import (
+    ArchiveFileSystem,
+    is_archive_file,
+    inside_archive,
+)
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.ui.folder_browser import FolderBrowser
 from multipane_commander.ui.quick_view import QuickViewWidget
@@ -57,7 +62,10 @@ class PaneView(QFrame):
     ) -> None:
         super().__init__()
         self.pane_state = pane_state
-        self.fs = LocalFileSystem()
+        self._local_fs = LocalFileSystem()
+        self._archive_fs = ArchiveFileSystem()
+        self.fs = self._local_fs
+        self._quick_view_temp_path: Path | None = None
         self.bookmark_store = bookmark_store
         self.icon_provider = QFileIconProvider()
         self.marked_paths: set[Path] = set()
@@ -269,6 +277,32 @@ class PaneView(QFrame):
         self.preferences_changed.emit()
 
     def set_quick_view_source(self, path: Path | None) -> None:
+        # Clean up any temp file extracted for the previous archive preview.
+        if self._quick_view_temp_path is not None:
+            try:
+                self._quick_view_temp_path.unlink()
+            except OSError:
+                pass
+            self._quick_view_temp_path = None
+
+        if path is None:
+            self.quick_view.show_path(None)
+            return
+
+        ctx = inside_archive(path)
+        if ctx is not None and str(ctx[1]) and str(ctx[1]) != ".":
+            # File inside an archive — extract to a temp path for inline preview.
+            try:
+                temp_path = self._archive_fs.extract_entry_to_temp(path)
+            except Exception:
+                self.quick_view.show_path(None)
+                return
+            self._quick_view_temp_path = temp_path
+            # Re-label so the user still sees the virtual file name.
+            self.quick_view.show_path(temp_path)
+            self.quick_view.title_label.setText(path.name or str(path))
+            return
+
         self.quick_view.show_path(path)
 
     def is_thumbnail_mode_enabled(self) -> bool:
@@ -404,7 +438,18 @@ class PaneView(QFrame):
     def refresh(self) -> None:
         current_path = self.active_tab.path
         self._ensure_tab_history(self.active_tab)
-        preserved_marks = {path for path in self.marked_paths if path.parent == current_path and path.exists()}
+        # Switch the active filesystem based on whether we're inside an archive.
+        in_archive = inside_archive(current_path) is not None
+        self.fs = self._archive_fs if in_archive else self._local_fs
+        if in_archive:
+            preserved_marks = {
+                path for path in self.marked_paths if path.parent == current_path
+            }
+        else:
+            preserved_marks = {
+                path for path in self.marked_paths
+                if path.parent == current_path and path.exists()
+            }
         self.marked_paths = preserved_marks
         preserved_current_path = self.preview_path()
         self._rebuild_tab_strip()
@@ -1007,8 +1052,18 @@ class PaneView(QFrame):
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
         if not isinstance(path, Path):
             return
-        if path.is_dir():
+        # Real archive file: enter it as a virtual directory.
+        if is_archive_file(path):
             self.navigate_to(path)
+            return
+        # Virtual entries store is_dir in UserRole+3.
+        kind = self._item_data(item, Qt.ItemDataRole.UserRole + 3)
+        if kind == "dir" or path.is_dir():
+            self.navigate_to(path)
+            return
+        # Inside an archive, plain files can't be opened via the OS handler
+        # (the Path doesn't exist on disk). Defer to F3 / F5 instead.
+        if inside_archive(path) is not None:
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
