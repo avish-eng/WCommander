@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -932,6 +932,8 @@ class PaneView(QFrame):
             return
         if path.is_dir():
             self.navigate_to(path)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _update_status(self, *_args) -> None:
         item = self._current_browser_item()

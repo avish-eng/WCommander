@@ -242,6 +242,41 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F0_2_enter_on_file_launches_via_desktop_services(tmp_path: Path, monkeypatch) -> None:
+    file_a, _file_b, _sub = _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    _set_cursor_to(pane, file_a)
+
+    captured: list[str] = []
+
+    def fake_open(url) -> bool:
+        captured.append(url.toLocalFile())
+        return True
+
+    from PySide6.QtGui import QDesktopServices
+    monkeypatch.setattr(QDesktopServices, "openUrl", fake_open)
+
+    pane._activate_item(pane.file_list.currentItem())
+
+    assert captured == [str(file_a)]
+
+
+def test_F0_2_enter_on_directory_does_not_launch(tmp_path: Path, monkeypatch) -> None:
+    """Enter on a directory should still descend, not call openUrl."""
+    _file_a, _file_b, sub = _populate_dir(tmp_path)
+    pane = _make_pane(tmp_path)
+    _set_cursor_to(pane, sub)
+
+    captured: list[str] = []
+    from PySide6.QtGui import QDesktopServices
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    pane._activate_item(pane.file_list.currentItem())
+
+    assert captured == []
+    assert pane.active_tab.path == sub
+
+
 def test_F0_1_pane_proxies_focus_to_file_list(tmp_path: Path) -> None:
     pane = _make_pane(tmp_path)
 
