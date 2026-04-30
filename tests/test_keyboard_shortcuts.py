@@ -242,6 +242,48 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_6_type_to_jump_jumps_to_first_match(tmp_path: Path) -> None:
+    (tmp_path / "alpha.txt").write_text("a")
+    (tmp_path / "beta.txt").write_text("b")
+    (tmp_path / "betacarotene.txt").write_text("c")
+    (tmp_path / "gamma.txt").write_text("d")
+    pane = _make_pane(tmp_path)
+
+    pane.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, "b"))
+
+    item = pane.file_list.currentItem()
+    assert item is not None
+    assert item.text(0).lower().startswith("b"), f"expected b*, got {item.text(0)}"
+
+
+def test_F1_6_type_to_jump_extends_with_subsequent_chars(tmp_path: Path) -> None:
+    (tmp_path / "beta.txt").write_text("b")
+    (tmp_path / "betacarotene.txt").write_text("c")
+    (tmp_path / "boris.txt").write_text("d")
+    pane = _make_pane(tmp_path)
+
+    pane.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier, "b"))
+    pane.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_E, Qt.KeyboardModifier.NoModifier, "e"))
+    pane.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_T, Qt.KeyboardModifier.NoModifier, "t"))
+
+    item = pane.file_list.currentItem()
+    assert item is not None
+    assert item.text(0).lower().startswith("bet"), f"expected bet*, got {item.text(0)}"
+
+
+def test_F1_6_type_to_jump_ignores_modifiers(tmp_path: Path) -> None:
+    (tmp_path / "alpha.txt").write_text("a")
+    pane = _make_pane(tmp_path)
+    initial = pane.file_list.currentItem()
+
+    pane.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, "a")
+    )
+
+    # Ctrl+A is mark-all; should not be consumed by type-to-jump
+    assert pane.marked_paths != set()
+
+
 def test_F2_14_shell_quote_passthrough_for_simple_names() -> None:
     from multipane_commander.ui.main_window import MainWindow
 

@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (P2 #16) `Alt+1`..`Alt+6` snap to layout presets — Default, Focus Files, Focus Terminal, Terminal Right, Terminal Left, Balanced — wiring the existing preset handlers to keyboard shortcuts (previously menu-only). SPEC §5.3 calls for `Alt+1..Alt+8`; we bind the six presets actually implemented today and reserve 7/8 for future presets.
 - (P2 #14) `Ctrl+Enter` / `Ctrl+Return` pastes the cursor item's name into the terminal input; `Alt+Enter` / `Alt+Return` pastes the full path. The terminal dock is revealed and focused if hidden. Names with spaces or shell metacharacters are double-quoted defensively.
 - (P1 #8) `Alt+F1` / `Alt+F2` pop up a drive/mount menu for the active / passive pane (the most-used Total Commander shortcut after F5/F6). Selecting an entry navigates that pane; reuses the existing `platform.root_paths()` so behaviour matches the folder browser.
+- (P1 #6) Type-to-jump quick search in panes (SPEC §6.4). Typing a printable character with no modifier (other than Shift) advances the cursor to the first entry whose name starts with the typed prefix; subsequent characters extend the prefix; an inactivity timeout (750 ms) clears the buffer.
 
 ### Verified
 

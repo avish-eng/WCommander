@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -92,6 +92,11 @@ class PaneView(QFrame):
         self._drag_source_paths: list[Path] = []
         self._drop_target_dir: Path | None = None
         self._cut_pending_paths: set[Path] = set()
+        self._type_to_jump_buffer: str = ""
+        self._type_to_jump_timer = QTimer(self)
+        self._type_to_jump_timer.setSingleShot(True)
+        self._type_to_jump_timer.setInterval(750)
+        self._type_to_jump_timer.timeout.connect(self._reset_type_to_jump)
         self.theme_palette = build_palette(builtin_themes()[0])
         self._thumbnail_size_presets = {
             "Small": {"icon": QSize(96, 72), "grid": QSize(122, 124)},
@@ -788,6 +793,9 @@ class PaneView(QFrame):
             self.operation_requested.emit("delete")
             event.accept()
             return
+        if self._maybe_type_to_jump(event):
+            event.accept()
+            return
         super().keyPressEvent(event)
 
     def focusInEvent(self, event) -> None:  # type: ignore[override]
@@ -892,6 +900,9 @@ class PaneView(QFrame):
                 self.operation_requested.emit("delete")
                 event.accept()
                 return True
+            if self._maybe_type_to_jump(event):
+                event.accept()
+                return True
         return super().eventFilter(watched, event)
 
     def navigate_to(self, path: Path, *, record_history: bool = True) -> None:
@@ -925,6 +936,32 @@ class PaneView(QFrame):
             return None
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
         return path if isinstance(path, Path) else None
+
+    def _maybe_type_to_jump(self, event) -> bool:
+        if event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier:
+            return False
+        text = event.text()
+        if not text or len(text) != 1 or not text.isprintable() or text == " ":
+            return False
+        self._type_to_jump_buffer += text.lower()
+        self._type_to_jump_timer.start()
+        return self._jump_to_first_match(self._type_to_jump_buffer)
+
+    def _jump_to_first_match(self, prefix: str) -> bool:
+        if not prefix:
+            return False
+        for row in range(self.file_list.topLevelItemCount()):
+            item = self.file_list.topLevelItem(row)
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+                continue
+            label = item.text(0).lower()
+            if label.startswith(prefix):
+                self.file_list.setCurrentItem(item)
+                return True
+        return False
+
+    def _reset_type_to_jump(self) -> None:
+        self._type_to_jump_buffer = ""
 
     def _activate_item(self, item) -> None:
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
