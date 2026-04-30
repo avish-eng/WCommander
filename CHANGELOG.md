@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - F4 launches a text editor for the cursor item via `launch_editor()` — resolution chain: `$VISUAL` → `$EDITOR` → `code` on PATH → OS default association. Bound as a `QShortcut` (previously F4 was only on the on-screen function-key bar).
   - F10 opens a context menu organised by SPEC §5.4 sections (File / Mark / Commands / Show), with each entry connected to its existing handler (Rename / Copy / Move / MkDir / Delete / Mark all / Refresh / New tab / Toggle terminal / Layout / Jobs / Thumbnails). Bound as a `QShortcut` and surfaced through the function-key bar.
 
+### Changed
+
+- (P0 #5) `SPEC.md` keymap inconsistencies resolved.
+  - §14 table: F2 row corrected from "Refresh active pane" to "Rename" (matches NC/TC convention and existing implementation). Refresh moved to `Ctrl+R` and called out below the table. Shift+F6 added to the table as the TC alias for rename.
+  - §9.2 fan-out: Shift+F6 was claimed as broadcast-move, colliding with the rename binding above. Reassigned broadcast-move to `Ctrl+Shift+F6` and added a cross-reference note.
+  - §14 / §8.1: F9 was described as "focus terminal" while the implementation toggles visibility. Reconciled to "toggle visibility, focus terminal input on show" with `Ctrl+\`` as alias.
+
 ### Verified
 
 - (P0 #3) SPEC §16 spike-3 ("F-keys fire while a path field or the terminal has focus") is met by the existing `QShortcut` + `WindowShortcut` setup. Empirically confirmed: `QLineEdit` and `QPlainTextEdit` (the widget classes used by the breadcrumb path bar and terminal surface) do not consume F-key events, so Qt's shortcut system routes them to the `MainWindow` handler regardless of which child holds focus. Locked in `test_F0_3_f_keys_fire_with_qlineedit_focused`. **Caveat:** if the terminal is migrated to `QWebEngineView` per SPEC §8.1, web views consume keys aggressively and a global event filter or `ApplicationShortcut` context will be required at that point.

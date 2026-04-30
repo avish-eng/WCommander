@@ -168,7 +168,7 @@ The author uses the terminal constantly, so this cannot be a neutered command li
 - **Frontend:** `xterm.js` inside a Qt web view. `xterm.js` is the battle-tested terminal front-end used by VS Code, Hyper, and others.
 - **Bridge:** a local-only WebSocket server (bound to `127.0.0.1`, ephemeral port, token-auth) shuttles bytes between the xterm instance and the ConPTY. Python asyncio handles both ends.
 - **CWD sync:** default is **Follow active pane = on**. In this mode, pane changes issue a shell-specific `cd` so the terminal follows the active pane. The user can toggle Follow active pane off at any time, after which the terminal and panes diverge intentionally. v1 is one-way sync only (pane → terminal); terminal-driven cwd changes do not retarget panes.
-- **Pane-to-terminal integration:** `Ctrl+Enter` pastes the cursor item's name; `Alt+Enter` pastes the full path. `Ctrl+\`` toggles terminal visibility. `F9` focuses the terminal from anywhere.
+- **Pane-to-terminal integration:** `Ctrl+Enter` pastes the cursor item's name; `Alt+Enter` pastes the full path. Both ``Ctrl+` `` and `F9` toggle terminal visibility from anywhere; when the terminal becomes visible the focus is moved to the terminal input (so `F9` doubles as "focus terminal" once it's already open).
 
 ### 8.2 What this replaces
 
@@ -196,7 +196,7 @@ Activated only when ≥3 panes are open. With 2 panes, behavior is identical to 
 ### 9.2 Fan-out Operations (≥3 panes only)
 
 - `Shift+F5` — copy selection to **every** other pane
-- `Shift+F6` — broadcast-move (copy to all, delete source after all verify)
+- `Ctrl+Shift+F6` — broadcast-move (copy to all, delete source after all verify). `Shift+F6` is reserved for rename (TC convention, see §14).
 - `Ctrl+F5` — symlink into every other pane
 
 A preview dialog lists every destination before executing.
@@ -325,22 +325,25 @@ Buttons are reorderable by drag. User-commands can also be bound to F-keys via c
 
 ## 14. Function Key Bar
 
-| Key   | Action                            |
-|-------|-----------------------------------|
-| F1    | Help                              |
-| F2    | Refresh active pane               |
-| F3    | View file                         |
-| F4    | Edit file                         |
-| F5    | Copy (to resolved destination)    |
-| F6    | Move/Rename                       |
-| F7    | Make directory                    |
-| F8    | Delete (to Recycle Bin by default)|
-| F9    | Focus terminal                    |
-| F10   | Menu                              |
-| F11   | Layout presets                    |
-| F12   | Jobs view                         |
+| Key      | Action                                         |
+|----------|------------------------------------------------|
+| F1       | Help                                           |
+| F2       | Rename (NC/TC convention; same as Shift+F6)    |
+| F3       | View file                                      |
+| F4       | Edit file                                      |
+| F5       | Copy (to resolved destination)                 |
+| F6       | Move                                           |
+| Shift+F6 | Rename (TC alias of F2)                        |
+| F7       | Make directory                                 |
+| F8       | Delete (to Recycle Bin by default)             |
+| F9       | Toggle terminal visibility (alias: `Ctrl+\``)  |
+| F10      | Menu                                           |
+| F11      | Layout presets                                 |
+| F12      | Jobs view                                      |
 
 F-keys fire globally regardless of focus; printable keys respect focus (so typing into the terminal doesn't also scroll a pane).
+
+`Ctrl+R` refreshes the active pane (the iconic Norton/TC convention; F2 was the "Refresh" key in the original spec table but conflicted with F2 = Rename, so refresh moved to `Ctrl+R`).
 
 ---
 
