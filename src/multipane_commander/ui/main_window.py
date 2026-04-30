@@ -27,6 +27,7 @@ from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
+from multipane_commander.services.undo import UndoRecord, UndoStack
 from multipane_commander.platform import root_paths, root_section_label, same_filesystem
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.jobs_view import JobsView
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self.theme_button = QPushButton("Theme")
         self.bookmark_store = BookmarkStore(initial_paths=self.context.state.bookmarks)
         self.job_manager = JobManager(self)
+        self.undo_stack = UndoStack()
         self.root_layout: QVBoxLayout | None = None
         self.panes_host: QWidget | None = None
         self.function_bar: QWidget | None = None
@@ -288,6 +290,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Alt+Right"), self, activated=self._focus_pane_right)
         QShortcut(QKeySequence("Alt+Up"), self, activated=self._focus_pane_up)
         QShortcut(QKeySequence("Alt+Down"), self, activated=self._focus_pane_down)
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_last_operation)
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_last_operation)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1153,6 +1157,7 @@ class MainWindow(QMainWindow):
             self._show_error("Rename failed", f"{source_path}\n\n{exc}")
             return
 
+        self.undo_stack.push(UndoRecord(kind="rename", source=source_path, destination=destination_path))
         pane.refresh()
         pane.focus_list()
 
@@ -1314,6 +1319,38 @@ class MainWindow(QMainWindow):
             return
         self._set_active_pane(best_index)
         self.pane_views[best_index].focus_list()
+
+    def _undo_last_operation(self) -> None:
+        record = self.undo_stack.pop()
+        if record is None:
+            show_message(
+                parent=self,
+                title="Undo",
+                message="Nothing to undo.",
+                level="info",
+                accept_label="Close",
+            )
+            return
+        # invert: move destination back to source
+        if not record.destination.exists():
+            self._show_error(
+                "Undo failed",
+                f"Cannot undo {record.kind}: {record.destination} no longer exists.",
+            )
+            return
+        if record.source.exists():
+            self._show_error(
+                "Undo failed",
+                f"Cannot undo {record.kind}: {record.source} now exists.",
+            )
+            return
+        try:
+            self.fs.rename_entry(record.destination, record.source)
+        except OSError as exc:
+            self._show_error("Undo failed", f"{record.destination} -> {record.source}\n\n{exc}")
+            return
+        for pane in self.pane_views:
+            pane.refresh()
 
     def _focus_pane_left(self) -> None:
         self._focus_pane_in_direction("left")

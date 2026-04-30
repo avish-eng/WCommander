@@ -242,6 +242,53 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_11_undo_stack_records_rename_and_inverts(tmp_path: Path) -> None:
+    from multipane_commander.services.undo import UndoRecord, UndoStack
+
+    src = tmp_path / "old.txt"
+    dst = tmp_path / "new.txt"
+
+    stack = UndoStack()
+    stack.push(UndoRecord(kind="rename", source=src, destination=dst))
+
+    record = stack.pop()
+    assert record is not None
+    inv = record.inverse()
+    assert inv.source == dst
+    assert inv.destination == src
+    assert stack.pop() is None
+
+
+def test_F1_11_undo_stack_drops_delete_records() -> None:
+    from multipane_commander.services.undo import UndoRecord, UndoStack
+
+    stack = UndoStack()
+    stack.push(UndoRecord(kind="delete", source=Path("/tmp/x"), destination=Path("/tmp/x")))
+
+    assert stack.pop() is None
+    assert len(stack) == 0
+
+
+def test_F1_11_undo_stack_capped_at_capacity() -> None:
+    from multipane_commander.services.undo import UndoRecord, UndoStack
+
+    stack = UndoStack(capacity=3)
+    for i in range(5):
+        stack.push(
+            UndoRecord(
+                kind="rename",
+                source=Path(f"/tmp/a{i}"),
+                destination=Path(f"/tmp/b{i}"),
+            )
+        )
+
+    assert len(stack) == 3
+    # The three most recent should remain (i=2, 3, 4); pop returns LIFO.
+    assert stack.pop().source == Path("/tmp/a4")
+    assert stack.pop().source == Path("/tmp/a3")
+    assert stack.pop().source == Path("/tmp/a2")
+
+
 def test_F2_13_dir_size_with_cap_sums_files(tmp_path: Path) -> None:
     sub = tmp_path / "sub"
     sub.mkdir()

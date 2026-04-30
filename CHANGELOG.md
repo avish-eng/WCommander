@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (P1 #7) `Ctrl+S` quick-filter bar (SPEC §6.4). Reveals an inline `QLineEdit` at the top of the active pane; typing narrows the visible entries by case-insensitive substring match; `Esc` clears and dismisses the bar; `Enter` dismisses while keeping the filter applied.
 - (P2 #13) `Space` on a directory now computes its recursive size and updates the Size column (SPEC §7). v1 implementation is synchronous with a 50 000-entry cap so it never hangs the UI on pathological trees; capped results are labelled `(capped)`. Move to a background thread once we have a feel for typical directory sizes.
 - (P2 #15) `Alt+Left` / `Alt+Right` / `Alt+Up` / `Alt+Down` focus the spatially nearest pane in that direction (SPEC §5.3). Selection uses each pane's mapped global centre with primary axis distance + perpendicular distance as a tie-break. Falls back to no-op when no pane qualifies (e.g. `Alt+Right` from the rightmost pane).
+- (P1 #11) `Ctrl+Z` undoes the most recent rename (SPEC §12). Implementation: new `services/undo.py` with `UndoStack` (LIFO, capacity 50) and `UndoRecord(kind, source, destination)`. Rename pushes a record on success; Ctrl+Z pops and inverts via `rename_entry(destination, source)`. **Out of v1 scope:** undo for `move` (background-job integration deferred) and `delete` (system-trash restore is platform-specific). Both are tracked in SPEC §12 — the stack drops `delete` records silently rather than half-implement them.
 
 ### Verified
 
