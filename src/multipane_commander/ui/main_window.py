@@ -284,6 +284,10 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Alt+F1"), self, activated=self._show_drive_menu_for_active_pane)
         QShortcut(QKeySequence("Alt+F2"), self, activated=self._show_drive_menu_for_passive_pane)
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self._show_quick_filter_in_active_pane)
+        QShortcut(QKeySequence("Alt+Left"), self, activated=self._focus_pane_left)
+        QShortcut(QKeySequence("Alt+Right"), self, activated=self._focus_pane_right)
+        QShortcut(QKeySequence("Alt+Up"), self, activated=self._focus_pane_up)
+        QShortcut(QKeySequence("Alt+Down"), self, activated=self._focus_pane_down)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1264,6 +1268,64 @@ class MainWindow(QMainWindow):
 
     def _show_quick_filter_in_active_pane(self) -> None:
         self._active_pane().show_quick_filter()
+
+    def _focus_pane_in_direction(self, direction: str) -> None:
+        """Focus the pane spatially nearest to the active pane in `direction`.
+
+        `direction` is one of "left", "right", "up", "down". Picks the pane
+        whose centre lies furthest in `direction` from the active pane,
+        breaking ties by perpendicular distance. No-op if no pane qualifies.
+        """
+        if not self.pane_views:
+            return
+        active_index = self.context.state.layout.active_pane_index
+        if not (0 <= active_index < len(self.pane_views)):
+            return
+        active = self.pane_views[active_index]
+        if not active.isVisible():
+            return
+        active_center = active.mapToGlobal(active.rect().center())
+
+        best_index: int | None = None
+        best_score: tuple[int, int] | None = None
+        for index, pane in enumerate(self.pane_views):
+            if index == active_index or not pane.isVisible():
+                continue
+            center = pane.mapToGlobal(pane.rect().center())
+            dx = center.x() - active_center.x()
+            dy = center.y() - active_center.y()
+            if direction == "left" and dx >= 0:
+                continue
+            if direction == "right" and dx <= 0:
+                continue
+            if direction == "up" and dy >= 0:
+                continue
+            if direction == "down" and dy <= 0:
+                continue
+            score = (
+                abs(dy if direction in ("left", "right") else dx),
+                abs(dx if direction in ("left", "right") else dy),
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_index = index
+
+        if best_index is None:
+            return
+        self._set_active_pane(best_index)
+        self.pane_views[best_index].focus_list()
+
+    def _focus_pane_left(self) -> None:
+        self._focus_pane_in_direction("left")
+
+    def _focus_pane_right(self) -> None:
+        self._focus_pane_in_direction("right")
+
+    def _focus_pane_up(self) -> None:
+        self._focus_pane_in_direction("up")
+
+    def _focus_pane_down(self) -> None:
+        self._focus_pane_in_direction("down")
 
     def _show_drive_menu_for_active_pane(self) -> None:
         self._show_drive_menu(self._active_pane())
