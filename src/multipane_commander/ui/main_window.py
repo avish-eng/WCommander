@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
+from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -24,7 +27,8 @@ from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
-from multipane_commander.platform import same_filesystem
+from multipane_commander.services.undo import UndoRecord, UndoStack
+from multipane_commander.platform import root_paths, root_section_label, same_filesystem
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
@@ -37,7 +41,66 @@ from multipane_commander.ui.themes import (
     builtin_themes,
     resolve_theme_definition,
 )
+from multipane_commander.ui.find_files_dialog import FindFilesDialog
+from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_renames
 from multipane_commander.ui.transfer_dialog import TransferDialog
+
+
+_BINARY_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".ico", ".heic",
+    ".pdf",
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+    ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac", ".ogg", ".m4a", ".webm",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
+    ".sqlite", ".sqlite3", ".db",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".class", ".jar", ".pyc", ".o", ".a",
+})
+
+
+def _path_is_binary(path: Path) -> bool:
+    """Decide whether ``path`` should be opened by the OS-default app, not a text editor.
+
+    Extension first, then a null-byte sniff on the first 4 KB. Errors fall through
+    to the text path so unreadable files still hit the existing editor chain.
+    """
+    if path.suffix.lower() in _BINARY_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as handle:
+            return b"\x00" in handle.read(4096)
+    except OSError:
+        return False
+
+
+def launch_editor(path: Path) -> str:
+    """Launch a text editor (or OS-default for binaries) for ``path`` per SPEC §19.5.
+
+    Routing:
+
+    * Binary files (extension in the binary set, or a null byte in the first 4 KB)
+      skip ``$VISUAL`` / ``$EDITOR`` (they are text editors) and go straight to the
+      OS default association — Preview for images, the system PDF viewer, etc.
+      Returns ``"desktop-binary"``.
+    * Text-like files use the legacy chain: ``$VISUAL``, ``$EDITOR``, ``code`` on
+      PATH, then ``QDesktopServices``. Returns ``"visual"``, ``"editor"``, ``"code"``,
+      or ``"desktop"`` so callers and tests can verify the path taken.
+    """
+    if _path_is_binary(path):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        return "desktop-binary"
+    for env_var, label in (("VISUAL", "visual"), ("EDITOR", "editor")):
+        value = os.environ.get(env_var)
+        if value:
+            subprocess.Popen([value, str(path)])
+            return label
+    code_bin = shutil.which("code")
+    if code_bin:
+        subprocess.Popen([code_bin, str(path)])
+        return "code"
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    return "desktop"
 
 
 def determine_drag_drop_operation(
@@ -67,6 +130,7 @@ class MainWindow(QMainWindow):
         self.theme_button = QPushButton("Theme")
         self.bookmark_store = BookmarkStore(initial_paths=self.context.state.bookmarks)
         self.job_manager = JobManager(self)
+        self.undo_stack = UndoStack()
         self.root_layout: QVBoxLayout | None = None
         self.panes_host: QWidget | None = None
         self.function_bar: QWidget | None = None
@@ -216,7 +280,7 @@ class MainWindow(QMainWindow):
             ("F8", "Delete", self._delete_from_active_pane),
             ("Ctrl+R", "Refresh", self._refresh_active_pane),
             ("F9", "Terminal", self._toggle_terminal),
-            ("F10", "Menu", self._show_menu_placeholder),
+            ("F10", "Menu", self._show_main_menu),
             ("F11", "Layout", self._show_layout_menu),
             ("F12", "Jobs", self._toggle_jobs_view),
             ("Ctrl+Shift+V", "Thumbs", self._toggle_thumbnail_mode_in_active_pane),
@@ -229,6 +293,10 @@ class MainWindow(QMainWindow):
         )
         QShortcut(QKeySequence(Qt.Key.Key_F2), self, activated=self._rename_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F3), self, activated=self._toggle_passive_quick_view)
+        QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
+        QShortcut(QKeySequence("Shift+F3"), self, activated=self._open_external_viewer)
+        QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
+        QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._toggle_quick_view_raw_mode)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
@@ -244,7 +312,31 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F7), self, activated=self._mkdir_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F8), self, activated=self._delete_from_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self._delete_from_active_pane)
+        QShortcut(QKeySequence("Shift+F8"), self, activated=self._delete_from_active_pane_permanent)
+        QShortcut(QKeySequence("Shift+Del"), self, activated=self._delete_from_active_pane_permanent)
+        QShortcut(QKeySequence("Alt+1"), self, activated=self._apply_default_workspace_layout)
+        QShortcut(QKeySequence("Alt+2"), self, activated=self._apply_focus_files_layout)
+        QShortcut(QKeySequence("Alt+3"), self, activated=self._apply_focus_terminal_layout)
+        QShortcut(QKeySequence("Alt+4"), self, activated=self._apply_terminal_right_layout)
+        QShortcut(QKeySequence("Alt+5"), self, activated=self._apply_terminal_left_layout)
+        QShortcut(QKeySequence("Alt+6"), self, activated=self._apply_balanced_layout)
+        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._paste_active_filename_to_terminal)
+        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._paste_active_filename_to_terminal)
+        QShortcut(QKeySequence("Alt+Return"), self, activated=self._paste_active_full_path_to_terminal)
+        QShortcut(QKeySequence("Alt+Enter"), self, activated=self._paste_active_full_path_to_terminal)
+        QShortcut(QKeySequence("Alt+F1"), self, activated=self._show_drive_menu_for_active_pane)
+        QShortcut(QKeySequence("Alt+F2"), self, activated=self._show_drive_menu_for_passive_pane)
+        QShortcut(QKeySequence("Ctrl+S"), self, activated=self._show_quick_filter_in_active_pane)
+        QShortcut(QKeySequence("Alt+Left"), self, activated=self._focus_pane_left)
+        QShortcut(QKeySequence("Alt+Right"), self, activated=self._focus_pane_right)
+        QShortcut(QKeySequence("Alt+Up"), self, activated=self._focus_pane_up)
+        QShortcut(QKeySequence("Alt+Down"), self, activated=self._focus_pane_down)
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_last_operation)
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_last_operation)
+        QShortcut(QKeySequence("Ctrl+M"), self, activated=self._multi_rename_in_active_pane)
+        QShortcut(QKeySequence("Alt+F7"), self, activated=self._find_files_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
+        QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F12), self, activated=self._toggle_jobs_view)
         QShortcut(QKeySequence("Ctrl+`"), self, activated=self._toggle_terminal)
@@ -379,8 +471,16 @@ class MainWindow(QMainWindow):
         self.context.state.layout.active_pane_index = index
         for pane_index, pane_view in enumerate(self.pane_views):
             pane_view.set_active(pane_index == index)
-        self._sync_terminal_to_pane_directory(self._active_pane(), self._active_pane().current_directory())
-        self._sync_quick_view(self._active_pane())
+        new_active = self._active_pane()
+        # Route focus to the file list whenever a pane becomes active so
+        # arrows / Enter / Space drive the cursor immediately. Skip if the
+        # user is typing in the quick-filter bar (we don't want to steal
+        # focus mid-keystroke) or if focus already sits on the file list.
+        focused = QApplication.focusWidget()
+        if focused is not new_active._quick_filter_bar and focused is not new_active.file_list:
+            new_active.focus_list()
+        self._sync_terminal_to_pane_directory(new_active, new_active.current_directory())
+        self._sync_quick_view(new_active)
 
     def _sync_terminal_to_pane_directory(self, pane_view: PaneView, path: Path) -> None:
         if pane_view is not self._active_pane():
@@ -476,22 +576,94 @@ class MainWindow(QMainWindow):
         path = self._active_pane().current_path()
         if path is None:
             return
-        show_message(
-            parent=self,
-            title="Edit",
-            message=f"Editor launch is not implemented yet.\n\nSelected item:\n{path}",
-            level="info",
-            accept_label="Close",
-        )
+        launch_editor(path)
 
-    def _show_menu_placeholder(self) -> None:
-        show_message(
-            parent=self,
-            title="Menu",
-            message="Menu actions are not implemented yet.",
-            level="info",
-            accept_label="Close",
-        )
+    def _open_external_viewer(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_with_default_app(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _show_main_menu(self) -> None:
+        menu = self._build_main_menu()
+        popup_point = QCursor.pos()
+        menu_size = menu.sizeHint()
+        popup_point.setY(max(0, popup_point.y() - menu_size.height()))
+        menu.exec(popup_point)
+
+    def _build_main_menu(self) -> QMenu:
+        """Build the F10/menu-bar menu organised by SPEC §5.4 sections."""
+        menu = QMenu(self)
+
+        file_menu = menu.addMenu("File")
+        view_action = QAction("View (F3)", self)
+        view_action.triggered.connect(self._toggle_passive_quick_view)
+        file_menu.addAction(view_action)
+        raw_view_action = QAction("View — Toggle Raw Source (Ctrl+Shift+R)", self)
+        raw_view_action.triggered.connect(self._toggle_quick_view_raw_mode)
+        file_menu.addAction(raw_view_action)
+        web_view_action = QAction("View — Toggle Web Render (HTML)", self)
+        web_view_action.triggered.connect(self._toggle_quick_view_web_mode)
+        file_menu.addAction(web_view_action)
+        edit_action = QAction("Edit (F4)", self)
+        edit_action.triggered.connect(self._edit_in_active_pane)
+        file_menu.addAction(edit_action)
+        copy_action = QAction("Copy (F5)", self)
+        copy_action.triggered.connect(self._copy_from_active_pane)
+        file_menu.addAction(copy_action)
+        move_action = QAction("Move (F6)", self)
+        move_action.triggered.connect(self._move_from_active_pane)
+        file_menu.addAction(move_action)
+        rename_action = QAction("Rename (F2)", self)
+        rename_action.triggered.connect(self._rename_in_active_pane)
+        file_menu.addAction(rename_action)
+        mkdir_action = QAction("New Directory (F7)", self)
+        mkdir_action.triggered.connect(self._mkdir_in_active_pane)
+        file_menu.addAction(mkdir_action)
+        delete_action = QAction("Delete (F8)", self)
+        delete_action.triggered.connect(self._delete_from_active_pane)
+        file_menu.addAction(delete_action)
+
+        mark_menu = menu.addMenu("Mark")
+        mark_all_action = QAction("Mark All (Ctrl+A)", self)
+        mark_all_action.triggered.connect(lambda: self._active_pane()._mark_all_entries())
+        mark_menu.addAction(mark_all_action)
+        clear_marks_action = QAction("Clear Marks (Esc)", self)
+        clear_marks_action.triggered.connect(lambda: self._active_pane()._clear_marks())
+        mark_menu.addAction(clear_marks_action)
+
+        commands_menu = menu.addMenu("Commands")
+        refresh_action = QAction("Refresh (Ctrl+R)", self)
+        refresh_action.triggered.connect(self._refresh_active_pane)
+        commands_menu.addAction(refresh_action)
+        new_tab_action = QAction("New Tab (Ctrl+T)", self)
+        new_tab_action.triggered.connect(self._new_tab_in_active_pane)
+        commands_menu.addAction(new_tab_action)
+        close_tab_action = QAction("Close Tab (Ctrl+W)", self)
+        close_tab_action.triggered.connect(self._close_tab_in_active_pane)
+        commands_menu.addAction(close_tab_action)
+
+        show_menu = menu.addMenu("Show")
+        terminal_action = QAction("Toggle Terminal (F9)", self)
+        terminal_action.triggered.connect(self._toggle_terminal)
+        show_menu.addAction(terminal_action)
+        layout_action = QAction("Layout… (F11)", self)
+        layout_action.triggered.connect(self._show_layout_menu)
+        show_menu.addAction(layout_action)
+        jobs_action = QAction("Jobs (F12)", self)
+        jobs_action.triggered.connect(self._toggle_jobs_view)
+        show_menu.addAction(jobs_action)
+        thumbs_action = QAction("Toggle Thumbnails (Ctrl+Shift+V)", self)
+        thumbs_action.triggered.connect(self._toggle_thumbnail_mode_in_active_pane)
+        show_menu.addAction(thumbs_action)
+
+        return menu
 
     def _show_layout_menu(self) -> None:
         menu = QMenu(self)
@@ -789,6 +961,18 @@ class MainWindow(QMainWindow):
         else:
             preview_pane.set_quick_view_source(None)
 
+    def _toggle_quick_view_raw_mode(self) -> None:
+        preview_pane = self._passive_pane()
+        if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_raw_mode()
+
+    def _toggle_quick_view_web_mode(self) -> None:
+        preview_pane = self._passive_pane()
+        if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_web_mode()
+
     def _show_passive_quick_view(self) -> None:
         preview_pane = self._passive_pane()
         if not preview_pane.is_quick_view_enabled():
@@ -1054,6 +1238,7 @@ class MainWindow(QMainWindow):
             self._show_error("Rename failed", f"{source_path}\n\n{exc}")
             return
 
+        self.undo_stack.push(UndoRecord(kind="rename", source=source_path, destination=destination_path))
         pane.refresh()
         pane.focus_list()
 
@@ -1114,7 +1299,7 @@ class MainWindow(QMainWindow):
         pane.refresh()
         pane.focus_list()
 
-    def _delete_from_active_pane(self) -> None:
+    def _delete_from_active_pane(self, *, bypass_trash: bool = False) -> None:
         pane = self._active_pane()
         paths = pane.selected_paths()
         if not paths:
@@ -1124,11 +1309,27 @@ class MainWindow(QMainWindow):
         if len(paths) > 8:
             names += f"\n... and {len(paths) - 8} more"
 
+        if bypass_trash:
+            title = "Permanently Delete Items"
+            message = (
+                f"PERMANENTLY delete {len(paths)} item(s)? "
+                f"This bypasses the Recycle Bin and cannot be undone.\n\n{names}"
+            )
+            accept = "Permanently Delete"
+            job_title = f"Permanently delete {len(paths)} item(s)"
+            success_title = "Permanent delete"
+        else:
+            title = "Move Items To Recycle Bin"
+            message = f"Send {len(paths)} item(s) to the Recycle Bin?\n\n{names}"
+            accept = "Move To Recycle Bin"
+            job_title = f"Delete {len(paths)} item(s)"
+            success_title = "Delete"
+
         confirmed = ask_confirmation(
             parent=self,
-            title="Move Items To Recycle Bin",
-            message=f"Send {len(paths)} item(s) to the Recycle Bin?\n\n{names}",
-            accept_label="Move To Recycle Bin",
+            title=title,
+            message=message,
+            accept_label=accept,
             cancel_label="Keep Items",
             is_destructive=True,
         )
@@ -1137,13 +1338,195 @@ class MainWindow(QMainWindow):
 
         self.job_manager.start_file_job(
             parent=self,
-            title=f"Delete {len(paths)} item(s)",
-            actions=[FileJobAction(operation="delete", source=path) for path in paths],
+            title=job_title,
+            actions=[
+                FileJobAction(operation="delete", source=path, bypass_trash=bypass_trash)
+                for path in paths
+            ],
             on_finished=lambda result: self._on_file_job_finished(
                 result=result,
-                success_title="Delete",
+                success_title=success_title,
             ),
         )
+
+    def _delete_from_active_pane_permanent(self) -> None:
+        self._delete_from_active_pane(bypass_trash=True)
+
+    def _show_quick_filter_in_active_pane(self) -> None:
+        self._active_pane().show_quick_filter()
+
+    def _focus_pane_in_direction(self, direction: str) -> None:
+        """Focus the pane spatially nearest to the active pane in `direction`.
+
+        `direction` is one of "left", "right", "up", "down". Picks the pane
+        whose centre lies furthest in `direction` from the active pane,
+        breaking ties by perpendicular distance. No-op if no pane qualifies.
+        """
+        if not self.pane_views:
+            return
+        active_index = self.context.state.layout.active_pane_index
+        if not (0 <= active_index < len(self.pane_views)):
+            return
+        active = self.pane_views[active_index]
+        if not active.isVisible():
+            return
+        active_center = active.mapToGlobal(active.rect().center())
+
+        best_index: int | None = None
+        best_score: tuple[int, int] | None = None
+        for index, pane in enumerate(self.pane_views):
+            if index == active_index or not pane.isVisible():
+                continue
+            center = pane.mapToGlobal(pane.rect().center())
+            dx = center.x() - active_center.x()
+            dy = center.y() - active_center.y()
+            if direction == "left" and dx >= 0:
+                continue
+            if direction == "right" and dx <= 0:
+                continue
+            if direction == "up" and dy >= 0:
+                continue
+            if direction == "down" and dy <= 0:
+                continue
+            score = (
+                abs(dy if direction in ("left", "right") else dx),
+                abs(dx if direction in ("left", "right") else dy),
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_index = index
+
+        if best_index is None:
+            return
+        self._set_active_pane(best_index)
+        self.pane_views[best_index].focus_list()
+
+    def _find_files_in_active_pane(self) -> None:
+        pane = self._active_pane()
+        root = pane.active_tab.path
+        dialog = FindFilesDialog(
+            root,
+            parent=self,
+            on_open=self._open_search_result,
+        )
+        dialog.exec()
+
+    def _open_search_result(self, path: Path) -> None:
+        if not path.exists():
+            return
+        target_dir = path.parent if path.is_file() else path
+        pane = self._active_pane()
+        pane.navigate_to(target_dir)
+
+    def _multi_rename_in_active_pane(self) -> None:
+        pane = self._active_pane()
+        paths = pane.selected_paths()
+        if not paths:
+            return
+        dialog = MultiRenameDialog(paths, parent=self)
+        if dialog.exec() != MultiRenameDialog.DialogCode.Accepted:
+            return
+        previews = dialog.previews()
+        succeeded, errors = apply_renames(
+            previews,
+            rename=self.fs.rename_entry,
+            on_record=lambda src, dst: self.undo_stack.push(
+                UndoRecord(kind="rename", source=src, destination=dst)
+            ),
+        )
+        pane.refresh()
+        if errors:
+            self._show_error(
+                "Multi-rename completed with errors",
+                f"Renamed {succeeded} item(s).\n\n" + "\n".join(errors[:10]),
+            )
+
+    def _undo_last_operation(self) -> None:
+        record = self.undo_stack.pop()
+        if record is None:
+            show_message(
+                parent=self,
+                title="Undo",
+                message="Nothing to undo.",
+                level="info",
+                accept_label="Close",
+            )
+            return
+        # invert: move destination back to source
+        if not record.destination.exists():
+            self._show_error(
+                "Undo failed",
+                f"Cannot undo {record.kind}: {record.destination} no longer exists.",
+            )
+            return
+        if record.source.exists():
+            self._show_error(
+                "Undo failed",
+                f"Cannot undo {record.kind}: {record.source} now exists.",
+            )
+            return
+        try:
+            self.fs.rename_entry(record.destination, record.source)
+        except OSError as exc:
+            self._show_error("Undo failed", f"{record.destination} -> {record.source}\n\n{exc}")
+            return
+        for pane in self.pane_views:
+            pane.refresh()
+
+    def _focus_pane_left(self) -> None:
+        self._focus_pane_in_direction("left")
+
+    def _focus_pane_right(self) -> None:
+        self._focus_pane_in_direction("right")
+
+    def _focus_pane_up(self) -> None:
+        self._focus_pane_in_direction("up")
+
+    def _focus_pane_down(self) -> None:
+        self._focus_pane_in_direction("down")
+
+    def _show_drive_menu_for_active_pane(self) -> None:
+        self._show_drive_menu(self._active_pane())
+
+    def _show_drive_menu_for_passive_pane(self) -> None:
+        self._show_drive_menu(self._passive_pane())
+
+    def _show_drive_menu(self, target_pane: PaneView) -> None:
+        menu = QMenu(self)
+        menu.setTitle(root_section_label())
+        for path in root_paths():
+            label = str(path)
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, p=path, pane=target_pane: pane.navigate_to(p))
+            menu.addAction(action)
+        if not menu.actions():
+            return
+        menu.exec(QCursor.pos())
+
+    def _paste_active_filename_to_terminal(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        self._inject_into_terminal(self._shell_quote(path.name))
+
+    def _paste_active_full_path_to_terminal(self) -> None:
+        path = self._active_pane().current_path()
+        if path is None:
+            return
+        self._inject_into_terminal(self._shell_quote(str(path)))
+
+    def _inject_into_terminal(self, text: str) -> None:
+        if not self.terminal_dock.isVisible():
+            self.terminal_dock.setVisible(True)
+        self.terminal_dock.focus_input()
+        self.terminal_dock.output.inject_command(text + " ", run=False)
+
+    @staticmethod
+    def _shell_quote(text: str) -> str:
+        if any(ch.isspace() for ch in text) or any(ch in text for ch in '"\'\\$`!&|;<>(){}[]*?'):
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        return text
 
     def _confirm_overwrite(self, destination_path: Path) -> bool:
         return ask_confirmation(

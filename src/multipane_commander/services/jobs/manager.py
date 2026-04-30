@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multipane_commander.services.fs.archive_fs import ArchiveFileSystem, inside_archive
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult, FileJobSnapshot
 
@@ -27,6 +28,7 @@ class _FileJobWorker(QObject):
         super().__init__()
         self.actions = actions
         self.fs = LocalFileSystem()
+        self.archive_fs = ArchiveFileSystem()
         self.cancel_requested = False
 
     def cancel(self) -> None:
@@ -63,7 +65,16 @@ class _FileJobWorker(QObject):
                         )
                         continue
 
-                    if action.replace_existing and action.destination.exists():
+                    src_in_archive = inside_archive(action.source) is not None
+                    if src_in_archive:
+                        if action.operation == "move":
+                            raise RuntimeError(
+                                "Move from archive is read-only; use copy (F5) instead"
+                            )
+                        self.archive_fs.extract_entry_to(
+                            action.source, action.destination
+                        )
+                    elif action.replace_existing and action.destination.exists():
                         self.fs.replace_entry(
                             action.source,
                             action.destination,
@@ -75,8 +86,12 @@ class _FileJobWorker(QObject):
                         self.fs.move_entry(action.source, action.destination)
                     label = f"{action.source.name} -> {action.destination}"
                 elif action.operation == "delete":
-                    self.fs.delete_entry(action.source)
-                    label = f"Deleted {action.source}"
+                    self.fs.delete_entry(action.source, bypass_trash=action.bypass_trash)
+                    label = (
+                        f"Permanently deleted {action.source}"
+                        if action.bypass_trash
+                        else f"Deleted {action.source}"
+                    )
                 else:
                     errors.append(f"Unsupported action: {action}")
                     processed = index

@@ -7,6 +7,7 @@ from multipane_commander.state.store import load_state, save_state
 
 def test_state_store_persists_view_size_presets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     root = tmp_path / "workspace"
     root.mkdir()
@@ -71,6 +72,7 @@ def test_state_store_persists_view_size_presets(tmp_path: Path, monkeypatch) -> 
 
 def test_state_store_handles_malformed_numeric_values(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     root = tmp_path / "workspace"
     root.mkdir()
@@ -122,6 +124,7 @@ def test_state_store_handles_malformed_numeric_values(tmp_path: Path, monkeypatc
 
 def test_state_store_falls_back_when_payload_shape_is_invalid(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
     state_path = tmp_path / "MultiPaneCommander" / "state.json"
     state_path.parent.mkdir()

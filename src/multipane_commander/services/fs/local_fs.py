@@ -79,7 +79,10 @@ class LocalFileSystem:
     def mkdir(self, path: Path) -> None:
         path.mkdir()
 
-    def delete_entry(self, path: Path) -> None:
+    def delete_entry(self, path: Path, *, bypass_trash: bool = False) -> None:
+        if bypass_trash:
+            self.remove_existing(path)
+            return
         send2trash(str(path))
 
     def remove_existing(self, path: Path) -> None:

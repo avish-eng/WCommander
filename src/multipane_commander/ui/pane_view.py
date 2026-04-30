@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFont, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -21,6 +22,9 @@ from PySide6.QtWidgets import (
     QRubberBand,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -29,10 +33,58 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.state.model import PaneState, TabState
+from multipane_commander.services.fs.archive_fs import (
+    ArchiveFileSystem,
+    is_archive_file,
+    inside_archive,
+)
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.ui.folder_browser import FolderBrowser
 from multipane_commander.ui.quick_view import QuickViewWidget
 from multipane_commander.ui.themes import ThemePalette, build_palette, builtin_themes
+
+
+class _CursorRowDelegate(QStyledItemDelegate):
+    """Paint a strong selection bar for the view's current row.
+
+    QTreeWidget/QListWidget with selectionMode=NoSelection won't render the
+    standard selection highlight, and per-item setBackground() set via the
+    BackgroundRole gets ignored when the global QSS styles ::item. Drawing
+    the row in the delegate is the one place that reliably wins.
+    """
+
+    def __init__(self, pane: "PaneView", parent=None) -> None:
+        super().__init__(parent)
+        self._pane = pane
+
+    def paint(self, painter, option, index) -> None:  # type: ignore[override]
+        widget = option.widget
+        is_current = False
+        if widget is not None:
+            current = widget.currentIndex()
+            if current.isValid() and current.row() == index.row() and current.parent() == index.parent():
+                is_current = True
+
+        if is_current:
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            palette = self._pane.theme_palette
+            bg = QColor(palette.active_pane_border)
+            fg = QColor(palette.chip_text)
+            painter.save()
+            painter.fillRect(option.rect, bg)
+            painter.restore()
+            opt.palette.setColor(opt.palette.ColorRole.Text, fg)
+            opt.palette.setColor(opt.palette.ColorRole.WindowText, fg)
+            opt.palette.setColor(opt.palette.ColorRole.HighlightedText, fg)
+            opt.backgroundBrush = QBrush(bg)
+            # Strip the :hover/:selected state so default painting doesn't
+            # repaint our background.
+            opt.state &= ~QStyle.StateFlag.State_MouseOver
+            opt.state &= ~QStyle.StateFlag.State_Selected
+            super().paint(painter, opt, index)
+            return
+        super().paint(painter, option, index)
 
 
 class PaneView(QFrame):
@@ -56,7 +108,10 @@ class PaneView(QFrame):
     ) -> None:
         super().__init__()
         self.pane_state = pane_state
-        self.fs = LocalFileSystem()
+        self._local_fs = LocalFileSystem()
+        self._archive_fs = ArchiveFileSystem()
+        self.fs = self._local_fs
+        self._quick_view_temp_path: Path | None = None
         self.bookmark_store = bookmark_store
         self.icon_provider = QFileIconProvider()
         self.marked_paths: set[Path] = set()
@@ -92,6 +147,17 @@ class PaneView(QFrame):
         self._drag_source_paths: list[Path] = []
         self._drop_target_dir: Path | None = None
         self._cut_pending_paths: set[Path] = set()
+        self._type_to_jump_buffer: str = ""
+        self._type_to_jump_timer = QTimer(self)
+        self._type_to_jump_timer.setSingleShot(True)
+        self._type_to_jump_timer.setInterval(750)
+        self._type_to_jump_timer.timeout.connect(self._reset_type_to_jump)
+        self._quick_filter_text: str = ""
+        self._quick_filter_bar = QLineEdit()
+        self._quick_filter_bar.setPlaceholderText("Filter (Esc to clear)")
+        self._quick_filter_bar.setVisible(False)
+        self._quick_filter_bar.textChanged.connect(self._apply_quick_filter)
+        self._quick_filter_bar.installEventFilter(self)
         self.theme_palette = build_palette(builtin_themes()[0])
         self._thumbnail_size_presets = {
             "Small": {"icon": QSize(96, 72), "grid": QSize(122, 124)},
@@ -102,6 +168,10 @@ class PaneView(QFrame):
         self.setObjectName("pane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Route any focus targeted at the pane container to the inner file
+        # list so keyboard navigation (Up/Down/PgUp/PgDn/Home/End) reaches
+        # the QTreeWidget that actually understands those keys.
+        self.setFocusProxy(self.file_list)
         self.set_active(active)
 
         layout = QVBoxLayout(self)
@@ -166,6 +236,7 @@ class PaneView(QFrame):
         )
         self.file_list.setAcceptDrops(True)
         self.file_list.viewport().setAcceptDrops(True)
+        self.file_list.setItemDelegate(_CursorRowDelegate(self, self.file_list))
         self.file_list.installEventFilter(self)
         self.file_list.viewport().installEventFilter(self)
         self.thumbnail_list.setObjectName("thumbnailList")
@@ -184,6 +255,7 @@ class PaneView(QFrame):
         )
         self.thumbnail_list.setAcceptDrops(True)
         self.thumbnail_list.viewport().setAcceptDrops(True)
+        self.thumbnail_list.setItemDelegate(_CursorRowDelegate(self, self.thumbnail_list))
         self.thumbnail_list.installEventFilter(self)
         self.thumbnail_list.viewport().installEventFilter(self)
         self.status.setObjectName("paneStatus")
@@ -214,6 +286,7 @@ class PaneView(QFrame):
         layout.addLayout(title_row)
         layout.addLayout(location_row)
         layout.addWidget(self.breadcrumb_host)
+        layout.addWidget(self._quick_filter_bar)
         layout.addWidget(self.content_stack, 1)
         layout.addWidget(self.status)
 
@@ -252,6 +325,32 @@ class PaneView(QFrame):
         self.preferences_changed.emit()
 
     def set_quick_view_source(self, path: Path | None) -> None:
+        # Clean up any temp file extracted for the previous archive preview.
+        if self._quick_view_temp_path is not None:
+            try:
+                self._quick_view_temp_path.unlink()
+            except OSError:
+                pass
+            self._quick_view_temp_path = None
+
+        if path is None:
+            self.quick_view.show_path(None)
+            return
+
+        ctx = inside_archive(path)
+        if ctx is not None and str(ctx[1]) and str(ctx[1]) != ".":
+            # File inside an archive — extract to a temp path for inline preview.
+            try:
+                temp_path = self._archive_fs.extract_entry_to_temp(path)
+            except Exception:
+                self.quick_view.show_path(None)
+                return
+            self._quick_view_temp_path = temp_path
+            # Re-label so the user still sees the virtual file name.
+            self.quick_view.show_path(temp_path)
+            self.quick_view.title_label.setText(path.name or str(path))
+            return
+
         self.quick_view.show_path(path)
 
     def is_thumbnail_mode_enabled(self) -> bool:
@@ -387,7 +486,18 @@ class PaneView(QFrame):
     def refresh(self) -> None:
         current_path = self.active_tab.path
         self._ensure_tab_history(self.active_tab)
-        preserved_marks = {path for path in self.marked_paths if path.parent == current_path and path.exists()}
+        # Switch the active filesystem based on whether we're inside an archive.
+        in_archive = inside_archive(current_path) is not None
+        self.fs = self._archive_fs if in_archive else self._local_fs
+        if in_archive:
+            preserved_marks = {
+                path for path in self.marked_paths if path.parent == current_path
+            }
+        else:
+            preserved_marks = {
+                path for path in self.marked_paths
+                if path.parent == current_path and path.exists()
+            }
         self.marked_paths = preserved_marks
         preserved_current_path = self.preview_path()
         self._rebuild_tab_strip()
@@ -752,7 +862,9 @@ class PaneView(QFrame):
             self.operation_requested.emit("rename")
             event.accept()
             return
-        if event.matches(QKeySequence.StandardKey.Refresh) or (
+        # Don't use QKeySequence.StandardKey.Refresh — Qt maps it to F5 on
+        # several platforms, which collides with TC's F5 = Copy below.
+        if (
             event.key() == Qt.Key.Key_R
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
@@ -780,6 +892,9 @@ class PaneView(QFrame):
             return
         if event.key() == Qt.Key.Key_Delete:
             self.operation_requested.emit("delete")
+            event.accept()
+            return
+        if self._maybe_type_to_jump(event):
             event.accept()
             return
         super().keyPressEvent(event)
@@ -861,7 +976,22 @@ class PaneView(QFrame):
                     )
                     event.acceptProposedAction()
                     return True
-        if watched in {self.file_list, self.thumbnail_list} and event.type() == QEvent.Type.KeyPress:
+        if watched is self._quick_filter_bar and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.hide_quick_filter(clear=True)
+                self._apply_quick_filter("")
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.hide_quick_filter(clear=False)
+                return True
+        if watched in {self.file_list, self.thumbnail_list, self.file_list.viewport(), self.thumbnail_list.viewport()} and event.type() == QEvent.Type.KeyPress:
+            # With selectionMode == NoSelection, Qt's QAbstractItemView blocks
+            # arrow-key cursor movement by design (it's tied to the selection
+            # model). We do our own marking via Insert/Space/Ctrl+A, so we
+            # need to drive the cursor explicitly here.
+            if self._handle_navigation_key(watched, event):
+                event.accept()
+                return True
             if event.key() in (Qt.Key.Key_Insert, Qt.Key.Key_Space):
                 self._toggle_current_selection()
                 event.accept()
@@ -884,6 +1014,9 @@ class PaneView(QFrame):
                 return True
             if event.key() == Qt.Key.Key_Delete:
                 self.operation_requested.emit("delete")
+                event.accept()
+                return True
+            if self._maybe_type_to_jump(event):
                 event.accept()
                 return True
         return super().eventFilter(watched, event)
@@ -920,12 +1053,145 @@ class PaneView(QFrame):
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
         return path if isinstance(path, Path) else None
 
+    def show_quick_filter(self) -> None:
+        self._quick_filter_bar.setVisible(True)
+        self._quick_filter_bar.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._quick_filter_bar.selectAll()
+
+    def hide_quick_filter(self, *, clear: bool = True) -> None:
+        if clear:
+            self._quick_filter_bar.clear()
+        self._quick_filter_bar.setVisible(False)
+        self.file_list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _apply_quick_filter(self, text: str) -> None:
+        self._quick_filter_text = text.strip().lower()
+        for row in range(self.file_list.topLevelItemCount()):
+            item = self.file_list.topLevelItem(row)
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+                item.setHidden(False)
+                continue
+            if not self._quick_filter_text:
+                item.setHidden(False)
+                continue
+            label = item.text(0).lower()
+            item.setHidden(self._quick_filter_text not in label)
+
+    def _handle_navigation_key(self, watched, event) -> bool:
+        """Drive Up/Down/PgUp/PgDn/Home/End/Enter on the file list ourselves.
+
+        QAbstractItemView with selectionMode == NoSelection refuses to move
+        currentItem on arrow keys (by design — see Qt docs / forum: when
+        selection is disabled, the navigation hooks that update currentIndex
+        are gated). We need our own custom-mark model, so we re-implement
+        the navigation here.
+        """
+        key = event.key()
+        modifiers = event.modifiers()
+        # On macOS, the standard arrow keys carry KeypadModifier — don't treat
+        # that as "the user is invoking a shortcut". Only bail out for Ctrl /
+        # Alt / Meta so the global shortcut layer keeps Ctrl+arrow / Alt+arrow.
+        blocking = (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        )
+        if modifiers & blocking:
+            return False
+
+        # Enter / Return — activate cursor item (descend dir / launch file).
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            current = self.file_list.currentItem()
+            if current is not None:
+                self._activate_item(current)
+                return True
+            return False
+
+        if watched not in {self.file_list, self.file_list.viewport()}:
+            return False  # thumbnail list keeps Qt's icon-grid navigation
+
+        count = self.file_list.topLevelItemCount()
+        if count == 0:
+            return False
+        current = self.file_list.currentItem()
+        current_row = self.file_list.indexOfTopLevelItem(current) if current else -1
+        if current_row < 0:
+            current_row = 0
+
+        if key == Qt.Key.Key_Down:
+            target_row = min(count - 1, current_row + 1)
+        elif key == Qt.Key.Key_Up:
+            target_row = max(0, current_row - 1)
+        elif key == Qt.Key.Key_PageDown:
+            target_row = min(count - 1, current_row + max(1, self._page_step()))
+        elif key == Qt.Key.Key_PageUp:
+            target_row = max(0, current_row - max(1, self._page_step()))
+        elif key == Qt.Key.Key_Home:
+            target_row = 0
+        elif key == Qt.Key.Key_End:
+            target_row = count - 1
+        else:
+            return False
+
+        if target_row == current_row:
+            return True  # consume so QAIV doesn't no-op-blink
+        target_item = self.file_list.topLevelItem(target_row)
+        if target_item is not None:
+            self.file_list.setCurrentItem(target_item)
+            self.file_list.scrollToItem(target_item)
+            self._refresh_row_styles()
+            self.file_list.viewport().update()
+        return True
+
+    def _page_step(self) -> int:
+        viewport = self.file_list.viewport()
+        row_height = max(1, self.file_list.sizeHintForRow(0))
+        return max(1, viewport.height() // row_height)
+
+    def _maybe_type_to_jump(self, event) -> bool:
+        if event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier:
+            return False
+        text = event.text()
+        if not text or len(text) != 1 or not text.isprintable() or text == " ":
+            return False
+        self._type_to_jump_buffer += text.lower()
+        self._type_to_jump_timer.start()
+        return self._jump_to_first_match(self._type_to_jump_buffer)
+
+    def _jump_to_first_match(self, prefix: str) -> bool:
+        if not prefix:
+            return False
+        for row in range(self.file_list.topLevelItemCount()):
+            item = self.file_list.topLevelItem(row)
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+                continue
+            label = item.text(0).lower()
+            if label.startswith(prefix):
+                self.file_list.setCurrentItem(item)
+                return True
+        return False
+
+    def _reset_type_to_jump(self) -> None:
+        self._type_to_jump_buffer = ""
+
     def _activate_item(self, item) -> None:
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
         if not isinstance(path, Path):
             return
-        if path.is_dir():
+        # Real archive file: enter it as a virtual directory.
+        if is_archive_file(path):
             self.navigate_to(path)
+            return
+        # Virtual entries store is_dir in UserRole+3.
+        kind = self._item_data(item, Qt.ItemDataRole.UserRole + 3)
+        if kind == "dir" or path.is_dir():
+            self.navigate_to(path)
+            return
+        # Inside an archive, plain files can't be opened via the OS handler
+        # (the Path doesn't exist on disk). Defer to F3 / F5 instead.
+        if inside_archive(path) is not None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _update_status(self, *_args) -> None:
         item = self._current_browser_item()
@@ -987,8 +1253,50 @@ class PaneView(QFrame):
             self.marked_paths.remove(path)
         else:
             self.marked_paths.add(path)
+        if path.is_dir():
+            self._compute_and_apply_dir_size(item, path)
         self._advance_current_item()
         self._update_status()
+
+    def _compute_and_apply_dir_size(self, item, path: Path) -> None:
+        """Compute total bytes under `path` and update the size column.
+
+        v1: synchronous walk capped at 50 000 entries so we never hang the
+        UI on pathological trees. For trees over the cap the column shows
+        "(>50k items)" instead of a number. Move to QThreadPool when we
+        have a baseline for typical sizes.
+        """
+        size, capped = self._dir_size_with_cap(path, cap=50_000)
+        if isinstance(item, QTreeWidgetItem):
+            label = self._format_size(size) + (" (capped)" if capped else "")
+            item.setText(2, label)
+            item.setData(0, Qt.ItemDataRole.UserRole + 2, size)
+
+    @staticmethod
+    def _dir_size_with_cap(root: Path, *, cap: int) -> tuple[int, bool]:
+        total = 0
+        seen = 0
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            try:
+                with __import__("os").scandir(current) as it:
+                    for entry in it:
+                        seen += 1
+                        if seen > cap:
+                            return total, True
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                            else:
+                                total += entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        return total, False
 
     def _go_up(self) -> None:
         self.navigate_to(self.active_tab.path.parent)
@@ -1092,7 +1400,10 @@ class PaneView(QFrame):
     def _refresh_row_styles(self) -> None:
         palette = self.theme_palette
         current_item = self.file_list.currentItem()
-        has_focus = self.file_list.hasFocus()
+        # QAbstractScrollArea redirects focus to its viewport via focusProxy,
+        # so file_list.hasFocus() is False whenever the user is actually
+        # interacting with the list. Treat viewport focus as list focus.
+        has_focus = self.file_list.hasFocus() or self.file_list.viewport().hasFocus()
 
         for row in range(self.file_list.topLevelItemCount()):
             item = self.file_list.topLevelItem(row)
@@ -1123,8 +1434,8 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_marked_text)
                 font.setBold(True)
             elif is_current:
-                base_bg = QColor(palette.row_current_bg)
-                fg = QColor(palette.row_current_text)
+                base_bg = QColor(palette.active_pane_border)
+                fg = QColor(palette.chip_text)
             if is_drop_target:
                 base_bg = QColor(palette.row_drop_target_bg)
                 fg = QColor(palette.row_drop_target_text)
@@ -1140,7 +1451,7 @@ class PaneView(QFrame):
                 item.setFont(column, font)
 
         current_thumb = self.thumbnail_list.currentItem()
-        thumb_has_focus = self.thumbnail_list.hasFocus()
+        thumb_has_focus = self.thumbnail_list.hasFocus() or self.thumbnail_list.viewport().hasFocus()
         for row in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(row)
             item_type = item.data(Qt.ItemDataRole.UserRole + 3)
@@ -1170,8 +1481,8 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_marked_text)
                 font.setBold(True)
             elif is_current:
-                base_bg = QColor(palette.row_current_bg)
-                fg = QColor(palette.row_current_text)
+                base_bg = QColor(palette.active_pane_border)
+                fg = QColor(palette.chip_text)
             if is_drop_target:
                 base_bg = QColor(palette.row_drop_target_bg)
                 fg = QColor(palette.row_drop_target_text)
