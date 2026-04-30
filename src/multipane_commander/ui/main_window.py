@@ -269,6 +269,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_F7), self, activated=self._mkdir_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F8), self, activated=self._delete_from_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self._delete_from_active_pane)
+        QShortcut(QKeySequence("Shift+F8"), self, activated=self._delete_from_active_pane_permanent)
+        QShortcut(QKeySequence("Shift+Del"), self, activated=self._delete_from_active_pane_permanent)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1194,7 +1196,7 @@ class MainWindow(QMainWindow):
         pane.refresh()
         pane.focus_list()
 
-    def _delete_from_active_pane(self) -> None:
+    def _delete_from_active_pane(self, *, bypass_trash: bool = False) -> None:
         pane = self._active_pane()
         paths = pane.selected_paths()
         if not paths:
@@ -1204,11 +1206,27 @@ class MainWindow(QMainWindow):
         if len(paths) > 8:
             names += f"\n... and {len(paths) - 8} more"
 
+        if bypass_trash:
+            title = "Permanently Delete Items"
+            message = (
+                f"PERMANENTLY delete {len(paths)} item(s)? "
+                f"This bypasses the Recycle Bin and cannot be undone.\n\n{names}"
+            )
+            accept = "Permanently Delete"
+            job_title = f"Permanently delete {len(paths)} item(s)"
+            success_title = "Permanent delete"
+        else:
+            title = "Move Items To Recycle Bin"
+            message = f"Send {len(paths)} item(s) to the Recycle Bin?\n\n{names}"
+            accept = "Move To Recycle Bin"
+            job_title = f"Delete {len(paths)} item(s)"
+            success_title = "Delete"
+
         confirmed = ask_confirmation(
             parent=self,
-            title="Move Items To Recycle Bin",
-            message=f"Send {len(paths)} item(s) to the Recycle Bin?\n\n{names}",
-            accept_label="Move To Recycle Bin",
+            title=title,
+            message=message,
+            accept_label=accept,
             cancel_label="Keep Items",
             is_destructive=True,
         )
@@ -1217,13 +1235,19 @@ class MainWindow(QMainWindow):
 
         self.job_manager.start_file_job(
             parent=self,
-            title=f"Delete {len(paths)} item(s)",
-            actions=[FileJobAction(operation="delete", source=path) for path in paths],
+            title=job_title,
+            actions=[
+                FileJobAction(operation="delete", source=path, bypass_trash=bypass_trash)
+                for path in paths
+            ],
             on_finished=lambda result: self._on_file_job_finished(
                 result=result,
-                success_title="Delete",
+                success_title=success_title,
             ),
         )
+
+    def _delete_from_active_pane_permanent(self) -> None:
+        self._delete_from_active_pane(bypass_trash=True)
 
     def _confirm_overwrite(self, destination_path: Path) -> bool:
         return ask_confirmation(

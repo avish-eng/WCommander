@@ -11,6 +11,7 @@ class FileJobAction:
     source: Path
     destination: Path | None = None
     replace_existing: bool = False
+    bypass_trash: bool = False
 
 
 @dataclass(slots=True)

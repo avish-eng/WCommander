@@ -75,8 +75,12 @@ class _FileJobWorker(QObject):
                         self.fs.move_entry(action.source, action.destination)
                     label = f"{action.source.name} -> {action.destination}"
                 elif action.operation == "delete":
-                    self.fs.delete_entry(action.source)
-                    label = f"Deleted {action.source}"
+                    self.fs.delete_entry(action.source, bypass_trash=action.bypass_trash)
+                    label = (
+                        f"Permanently deleted {action.source}"
+                        if action.bypass_trash
+                        else f"Deleted {action.source}"
+                    )
                 else:
                     errors.append(f"Unsupported action: {action}")
                     processed = index

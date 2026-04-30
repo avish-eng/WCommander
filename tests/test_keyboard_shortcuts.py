@@ -242,6 +242,39 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_12_local_fs_delete_bypass_trash_unlinks_file(tmp_path: Path) -> None:
+    from multipane_commander.services.fs.local_fs import LocalFileSystem
+
+    target = tmp_path / "doomed.txt"
+    target.write_text("x")
+    assert target.exists()
+
+    LocalFileSystem().delete_entry(target, bypass_trash=True)
+
+    assert not target.exists()
+
+
+def test_F1_12_local_fs_delete_bypass_trash_rmtree_dir(tmp_path: Path) -> None:
+    from multipane_commander.services.fs.local_fs import LocalFileSystem
+
+    sub = tmp_path / "doomed_dir"
+    sub.mkdir()
+    (sub / "inner.txt").write_text("x")
+
+    LocalFileSystem().delete_entry(sub, bypass_trash=True)
+
+    assert not sub.exists()
+
+
+def test_F1_12_file_job_action_carries_bypass_flag() -> None:
+    from multipane_commander.services.jobs.model import FileJobAction
+
+    a = FileJobAction(operation="delete", source=Path("/tmp/x"), bypass_trash=True)
+    assert a.bypass_trash is True
+    b = FileJobAction(operation="delete", source=Path("/tmp/y"))
+    assert b.bypass_trash is False  # default
+
+
 def test_F0_4_launch_editor_uses_visual_env_first(tmp_path: Path, monkeypatch) -> None:
     from multipane_commander.ui.main_window import launch_editor
 

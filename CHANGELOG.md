@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - §9.2 fan-out: Shift+F6 was claimed as broadcast-move, colliding with the rename binding above. Reassigned broadcast-move to `Ctrl+Shift+F6` and added a cross-reference note.
   - §14 / §8.1: F9 was described as "focus terminal" while the implementation toggles visibility. Reconciled to "toggle visibility, focus terminal input on show" with `Ctrl+\`` as alias.
 
+- (P1 #12) `Shift+F8` and `Shift+Del` permanently delete (bypass Recycle Bin). Confirmation prompt is more emphatic than the trash flow. `LocalFileSystem.delete_entry` gains a `bypass_trash` keyword and `FileJobAction` carries the flag through.
+
 ### Verified
 
 - (P0 #3) SPEC §16 spike-3 ("F-keys fire while a path field or the terminal has focus") is met by the existing `QShortcut` + `WindowShortcut` setup. Empirically confirmed: `QLineEdit` and `QPlainTextEdit` (the widget classes used by the breadcrumb path bar and terminal surface) do not consume F-key events, so Qt's shortcut system routes them to the `MainWindow` handler regardless of which child holds focus. Locked in `test_F0_3_f_keys_fire_with_qlineedit_focused`. **Caveat:** if the terminal is migrated to `QWebEngineView` per SPEC §8.1, web views consume keys aggressively and a global event filter or `ApplicationShortcut` context will be required at that point.
