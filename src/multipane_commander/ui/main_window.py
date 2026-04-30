@@ -47,7 +47,7 @@ from multipane_commander.ui.transfer_dialog import TransferDialog
 
 
 _BINARY_SUFFIXES = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".ico", ".heic",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".ico", ".heic",
     ".pdf",
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
     ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",

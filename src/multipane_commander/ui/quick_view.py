@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtSvgWidgets import QSvgWidget
@@ -13,10 +15,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QPushButton,
     QScrollArea,
+    QSlider,
     QStackedWidget,
     QTextBrowser,
     QVBoxLayout,
+    QWidget,
 )
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
@@ -26,10 +31,50 @@ from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
 
 
+_IMAGE_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".ico", ".heic",
+}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
 _HTML_SUFFIXES = {".html", ".htm"}
 _PDF_SUFFIXES = {".pdf"}
 _SVG_SUFFIXES = {".svg"}
+_ARCHIVE_SUFFIXES = {".zip", ".tar", ".7z", ".rar", ".jar"}
+_ARCHIVE_COMPOUND_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz")
+_ARCHIVE_ENTRY_CAP = 1000
+
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".flv"}
+_AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".aiff"}
+
+
+def _is_archive_path(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in _ARCHIVE_SUFFIXES:
+        return True
+    name = path.name.lower()
+    return any(name.endswith(compound) for compound in _ARCHIVE_COMPOUND_SUFFIXES)
+
+
+def _list_archive_entries(path: Path, cap: int) -> tuple[list[str], int]:
+    """Return up to ``cap`` entry names from ``path`` and the total count.
+
+    Uses libarchive-c, which understands zip / tar / tar.gz / 7z / rar /
+    jar / jar transparently.
+    """
+    import libarchive  # local import — keeps test startup snappy
+
+    entries: list[str] = []
+    total = 0
+    with libarchive.file_reader(str(path)) as reader:
+        for entry in reader:
+            total += 1
+            if len(entries) < cap:
+                size = getattr(entry, "size", None)
+                pathname = entry.pathname
+                if size is not None:
+                    entries.append(f"{pathname:<60s}  {size:>12,d} bytes")
+                else:
+                    entries.append(pathname)
+    return entries, total
 
 
 def _resolve_code_lexer(filename: str) -> Lexer | None:
@@ -123,6 +168,41 @@ class QuickViewWidget(QFrame):
         hex_font.setPointSize(10)
         self.hex_view.setFont(hex_font)
 
+        self.archive_view = QPlainTextEdit()
+        self.archive_view.setObjectName("quickViewArchive")
+        self.archive_view.setReadOnly(True)
+        archive_font = QFont("Menlo")
+        archive_font.setStyleHint(QFont.StyleHint.Monospace)
+        archive_font.setPointSize(10)
+        self.archive_view.setFont(archive_font)
+
+        self.media_view = QWidget()
+        self.media_view.setObjectName("quickViewMedia")
+        self.media_player = QMediaPlayer(self)
+        self.media_audio_output = QAudioOutput(self)
+        self.media_player.setAudioOutput(self.media_audio_output)
+        self.media_video_widget = QVideoWidget()
+        self.media_player.setVideoOutput(self.media_video_widget)
+        self.media_play_button = QPushButton("Play")
+        self.media_play_button.setObjectName("quickViewMediaPlay")
+        self.media_play_button.clicked.connect(self._toggle_media_playback)
+        self.media_seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.media_seek_slider.setObjectName("quickViewMediaSeek")
+        self.media_seek_slider.setRange(0, 0)
+        self.media_seek_slider.sliderMoved.connect(self.media_player.setPosition)
+        self.media_player.positionChanged.connect(self._on_media_position_changed)
+        self.media_player.durationChanged.connect(self._on_media_duration_changed)
+        self.media_player.playbackStateChanged.connect(self._on_media_state_changed)
+        media_layout = QVBoxLayout(self.media_view)
+        media_layout.setContentsMargins(0, 0, 0, 0)
+        media_layout.setSpacing(6)
+        media_layout.addWidget(self.media_video_widget, 1)
+        media_controls = QHBoxLayout()
+        media_controls.setContentsMargins(0, 0, 0, 0)
+        media_controls.addWidget(self.media_play_button)
+        media_controls.addWidget(self.media_seek_slider, 1)
+        media_layout.addLayout(media_controls)
+
         self.stack.addWidget(self.empty_label)
         self.stack.addWidget(self.text_preview)
         self.stack.addWidget(self.image_scroll)
@@ -132,6 +212,8 @@ class QuickViewWidget(QFrame):
         self.stack.addWidget(self.svg_view)
         self.stack.addWidget(self.code_view)
         self.stack.addWidget(self.hex_view)
+        self.stack.addWidget(self.archive_view)
+        self.stack.addWidget(self.media_view)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
@@ -159,6 +241,11 @@ class QuickViewWidget(QFrame):
         self.size_picker.setCurrentText(preset_name)
 
     def show_path(self, path: Path | None) -> None:
+        # Stop any currently-playing media before switching pages so audio
+        # doesn't keep playing when the user navigates to a different file.
+        if self.stack.currentWidget() is self.media_view:
+            self.media_player.stop()
+
         if path is None:
             self.title_label.setText("Quick View")
             self.title_meta_label.clear()
@@ -180,7 +267,7 @@ class QuickViewWidget(QFrame):
             return
 
         suffix = path.suffix.lower()
-        if suffix in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}:
+        if suffix in _IMAGE_SUFFIXES:
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
                 self._current_pixmap = pixmap
@@ -213,6 +300,34 @@ class QuickViewWidget(QFrame):
             self.stack.setCurrentWidget(self.empty_label)
             self.empty_label.setText("Unable to preview this SVG.")
             return
+
+        if suffix in _VIDEO_SUFFIXES or suffix in _AUDIO_SUFFIXES:
+            kind = "Video" if suffix in _VIDEO_SUFFIXES else "Audio"
+            self.media_player.setSource(QUrl.fromLocalFile(str(path)))
+            self.media_video_widget.setVisible(suffix in _VIDEO_SUFFIXES)
+            self.meta_label.setText(f"{kind} • press Play to start")
+            self.media_play_button.setText("Play")
+            self.media_play_button.setEnabled(True)
+            self.stack.setCurrentWidget(self.media_view)
+            return
+
+        if _is_archive_path(path):
+            try:
+                entries, total = _list_archive_entries(path, _ARCHIVE_ENTRY_CAP)
+            except Exception:  # libarchive raises ArchiveError, OSError, etc.
+                entries, total = [], -1
+            if total >= 0:
+                shown = len(entries)
+                if total > shown:
+                    self.meta_label.setText(
+                        f"Archive • {total:,} entries ({total - shown:,} more not shown)"
+                    )
+                else:
+                    self.meta_label.setText(f"Archive • {total:,} entries")
+                self.archive_view.setPlainText("\n".join(entries))
+                self.stack.setCurrentWidget(self.archive_view)
+                return
+            # libarchive choked — fall through to the binary/hex view below.
 
         try:
             file_size = path.stat().st_size
@@ -280,3 +395,21 @@ class QuickViewWidget(QFrame):
         font.setPointSize(preset["text_points"])
         self.text_preview.setFont(font)
         self._update_scaled_pixmap()
+
+    def _toggle_media_playback(self) -> None:
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+        else:
+            self.media_player.play()
+
+    def _on_media_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
+        self.media_play_button.setText(
+            "Pause" if state == QMediaPlayer.PlaybackState.PlayingState else "Play"
+        )
+
+    def _on_media_position_changed(self, position: int) -> None:
+        if not self.media_seek_slider.isSliderDown():
+            self.media_seek_slider.setValue(position)
+
+    def _on_media_duration_changed(self, duration: int) -> None:
+        self.media_seek_slider.setRange(0, max(0, duration))

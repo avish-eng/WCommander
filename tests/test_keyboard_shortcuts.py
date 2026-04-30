@@ -792,6 +792,83 @@ def test_F0_4_launch_editor_skips_editor_for_pdf(tmp_path: Path, monkeypatch) ->
     assert captured == [str(target)]
 
 
+def test_F0_4_launch_editor_skips_editor_for_tiff(tmp_path: Path, monkeypatch) -> None:
+    """TIFF should be routed to OS app (parity with png/jpg)."""
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "scan.tiff"
+    target.write_bytes(b"II*\x00" + b"\x00" * 32)
+
+    captured: list[str] = []
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr("multipane_commander.ui.main_window.subprocess.Popen", lambda *a, **k: None)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    assert launch_editor(target) == "desktop-binary"
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_ico(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "favicon.ico"
+    target.write_bytes(b"\x00\x00\x01\x00" + b"\x00" * 32)
+
+    captured: list[str] = []
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    assert launch_editor(target) == "desktop-binary"
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_video(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32)
+
+    captured: list[str] = []
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    assert launch_editor(target) == "desktop-binary"
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_audio(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "song.mp3"
+    target.write_bytes(b"ID3\x03" + b"\x00" * 32)
+
+    captured: list[str] = []
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    assert launch_editor(target) == "desktop-binary"
+    assert captured == [str(target)]
+
+
+def test_F0_4_launch_editor_skips_editor_for_office_doc(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from multipane_commander.ui.main_window import launch_editor
+
+    target = tmp_path / "report.docx"
+    target.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
+
+    captured: list[str] = []
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
+
+    assert launch_editor(target) == "desktop-binary"
+    assert captured == [str(target)]
+
+
 def test_F0_4_launch_editor_skips_editor_for_archive(tmp_path: Path, monkeypatch) -> None:
     from PySide6.QtGui import QDesktopServices
     from multipane_commander.ui.main_window import launch_editor

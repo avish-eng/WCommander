@@ -382,6 +382,330 @@ def test_F0_3_quick_view_highlights_json(tmp_path: Path) -> None:
     assert "value" in view.code_view.toPlainText()
 
 
+def test_F0_3_quick_view_highlights_xml(tmp_path: Path) -> None:
+    target = tmp_path / "config.xml"
+    target.write_text("<?xml version='1.0'?>\n<root><item>hi</item></root>\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    plain = view.code_view.toPlainText()
+    assert "<root>" in plain
+    assert "XML" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_yaml(tmp_path: Path) -> None:
+    target = tmp_path / "config.yaml"
+    target.write_text("key: value\nlist:\n  - one\n  - two\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "key: value" in view.code_view.toPlainText()
+    assert "YAML" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_yml_extension(tmp_path: Path) -> None:
+    target = tmp_path / "ci.yml"
+    target.write_text("name: ci\non: push\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+
+
+def test_F0_3_quick_view_highlights_css(tmp_path: Path) -> None:
+    target = tmp_path / "style.css"
+    target.write_text(".header { color: red; }\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert ".header" in view.code_view.toPlainText()
+    assert "CSS" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_rust(tmp_path: Path) -> None:
+    target = tmp_path / "lib.rs"
+    target.write_text("fn greet(name: &str) -> String {\n    format!(\"hi {}\", name)\n}\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "fn greet" in view.code_view.toPlainText()
+    assert "Rust" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_go(tmp_path: Path) -> None:
+    target = tmp_path / "main.go"
+    target.write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "package main" in view.code_view.toPlainText()
+
+
+def test_F0_3_quick_view_highlights_sql(tmp_path: Path) -> None:
+    target = tmp_path / "schema.sql"
+    target.write_text("CREATE TABLE users (id INT PRIMARY KEY);\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "CREATE" in view.code_view.toPlainText()
+    assert "SQL" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_shell(tmp_path: Path) -> None:
+    target = tmp_path / "deploy.sh"
+    target.write_text("#!/bin/bash\nset -euo pipefail\necho hi\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "#!/bin/bash" in view.code_view.toPlainText()
+
+
+def test_F0_3_quick_view_highlights_dockerfile(tmp_path: Path) -> None:
+    target = tmp_path / "Dockerfile"
+    target.write_text("FROM python:3.12\nRUN pip install pytest\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "FROM python" in view.code_view.toPlainText()
+    assert "Docker" in view.meta_label.text()
+
+
+def test_F0_3_quick_view_highlights_toml(tmp_path: Path) -> None:
+    target = tmp_path / "pyproject.toml"
+    target.write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.code_view
+    assert "[tool.ruff]" in view.code_view.toPlainText()
+
+
+def test_F0_3_quick_view_image_tiff(tmp_path: Path) -> None:
+    target = tmp_path / "scan.tiff"
+    image = QImage(4, 3, QImage.Format.Format_RGB32)
+    image.fill(0x00AAFF)
+    assert image.save(str(target), "TIFF"), "failed to write fixture TIFF"
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.image_scroll
+    assert "4 x 3 px" in view.title_meta_label.text()
+
+
+def test_F0_3_quick_view_image_ico(tmp_path: Path) -> None:
+    target = tmp_path / "favicon.ico"
+    image = QImage(16, 16, QImage.Format.Format_RGB32)
+    image.fill(0xFF0000)
+    assert image.save(str(target), "ICO"), "failed to write fixture ICO"
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.image_scroll
+    assert "16 x 16 px" in view.title_meta_label.text()
+
+
+def test_F0_3_quick_view_lists_zip_contents(tmp_path: Path) -> None:
+    import zipfile
+
+    target = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(target, "w") as zf:
+        zf.writestr("README.txt", "hello")
+        zf.writestr("src/main.py", "print('hi')\n")
+        zf.writestr("src/utils.py", "def helper(): pass\n")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.archive_view
+    body = view.archive_view.toPlainText()
+    assert "README.txt" in body
+    assert "src/main.py" in body
+    assert "src/utils.py" in body
+    assert "Archive" in view.meta_label.text()
+    assert "3" in view.meta_label.text()  # 3 entries
+
+
+def test_F0_3_quick_view_lists_tar_gz_contents(tmp_path: Path) -> None:
+    import tarfile
+
+    target = tmp_path / "release.tar.gz"
+    payload = tmp_path / "_payload"
+    payload.mkdir()
+    (payload / "VERSION").write_text("1.2.3")
+    (payload / "bin").mkdir()
+    (payload / "bin" / "tool").write_text("#!/bin/sh\n")
+    with tarfile.open(target, "w:gz") as tf:
+        tf.add(payload / "VERSION", arcname="release/VERSION")
+        tf.add(payload / "bin" / "tool", arcname="release/bin/tool")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.archive_view
+    body = view.archive_view.toPlainText()
+    assert "release/VERSION" in body
+    assert "release/bin/tool" in body
+
+
+def test_F0_3_quick_view_lists_7z_contents(tmp_path: Path) -> None:
+    import py7zr
+
+    target = tmp_path / "bundle.7z"
+    payload = tmp_path / "_payload7"
+    payload.mkdir()
+    (payload / "doc.txt").write_text("seven zip")
+    with py7zr.SevenZipFile(target, "w") as sz:
+        sz.writeall(payload, "bundle")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.archive_view
+    body = view.archive_view.toPlainText()
+    assert "doc.txt" in body
+
+
+def test_F0_3_quick_view_handles_corrupt_archive(tmp_path: Path) -> None:
+    """A .zip that fails to read must not raise; fall through to text/hex/empty."""
+    target = tmp_path / "broken.zip"
+    target.write_bytes(b"PK\x03\x04not really a zip")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    # Any sane fallback target is OK — what matters is no exception. libarchive
+    # may raise, in which case show_path falls through to text or hex depending
+    # on whether the bytes contain a null byte.
+    assert view.stack.currentWidget() in (
+        view.archive_view,
+        view.hex_view,
+        view.text_preview,
+        view.empty_label,
+    )
+
+
+def test_F0_3_quick_view_routes_video_to_media_player(tmp_path: Path) -> None:
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32)
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.media_view
+    assert "Video" in view.meta_label.text()
+    assert Path(view.media_player.source().toLocalFile()) == target
+
+
+def test_F0_3_quick_view_routes_audio_to_media_player(tmp_path: Path) -> None:
+    target = tmp_path / "song.mp3"
+    target.write_bytes(b"ID3\x03" + b"\x00" * 32)
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.media_view
+    assert "Audio" in view.meta_label.text()
+    assert Path(view.media_player.source().toLocalFile()) == target
+
+
+def test_F0_3_quick_view_video_does_not_autoplay(tmp_path: Path) -> None:
+    """Loading the preview must NOT start playback — user has to press Play."""
+    from PySide6.QtMultimedia import QMediaPlayer
+
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32)
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.media_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+
+
+def test_F0_3_quick_view_media_view_exposes_play_button(tmp_path: Path) -> None:
+    target = tmp_path / "song.wav"
+    target.write_bytes(b"RIFF" + b"\x00" * 32)
+
+    view = _make_widget()
+    view.show_path(target)
+
+    # The media view should have a play/pause control reachable for tests.
+    assert hasattr(view, "media_play_button")
+    assert view.media_play_button.isEnabled()
+
+
+def test_F0_3_quick_view_media_switching_resets_player(tmp_path: Path) -> None:
+    """Switching from one media file to another must update the player source."""
+    a = tmp_path / "a.mp3"
+    b = tmp_path / "b.mp3"
+    a.write_bytes(b"ID3" + b"\x00" * 32)
+    b.write_bytes(b"ID3" + b"\x00" * 32)
+
+    view = _make_widget()
+    view.show_path(a)
+    assert Path(view.media_player.source().toLocalFile()) == a
+
+    view.show_path(b)
+    assert Path(view.media_player.source().toLocalFile()) == b
+
+
+def test_F0_3_quick_view_leaving_media_stops_playback(tmp_path: Path) -> None:
+    """Switching away from media (to a text file) must stop the player so audio doesn't keep playing."""
+    from PySide6.QtMultimedia import QMediaPlayer
+
+    media = tmp_path / "song.mp3"
+    media.write_bytes(b"ID3" + b"\x00" * 32)
+    text = tmp_path / "notes.txt"
+    text.write_text("after", encoding="utf-8")
+
+    view = _make_widget()
+    view.show_path(media)
+    view.media_player.play()  # simulate user pressing play
+
+    view.show_path(text)
+
+    assert view.media_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+
+
+def test_F0_3_quick_view_caps_archive_entries(tmp_path: Path) -> None:
+    """Archives with thousands of entries must render within the cap."""
+    import zipfile
+
+    target = tmp_path / "huge.zip"
+    with zipfile.ZipFile(target, "w") as zf:
+        for i in range(2500):
+            zf.writestr(f"entry_{i:05d}.txt", "")
+
+    view = _make_widget()
+    view.show_path(target)
+
+    assert view.stack.currentWidget() is view.archive_view
+    # Cap is at 1000 entries — body should mention truncation when exceeded.
+    body = view.archive_view.toPlainText()
+    line_count = body.count("\n") + 1
+    assert line_count <= 1100, f"expected entry list capped, got {line_count} lines"
+    assert "more" in view.meta_label.text().lower() or "trunc" in body.lower()
+
+
 def test_F0_3_quick_view_falls_back_to_text_for_unknown_extension(tmp_path: Path) -> None:
     """Files with no pygments lexer must still render as plain text, not crash."""
     target = tmp_path / "notes.weirdext"
