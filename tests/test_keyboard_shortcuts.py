@@ -242,6 +242,76 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_9_template_renders_name_ext_counter() -> None:
+    from multipane_commander.ui.multi_rename_dialog import render_template
+
+    out = render_template("[N]_v[C]", name_no_ext="report", extension="txt", counter=3)
+    assert out == "report_v3"
+
+    out = render_template("[C03]_[N]", name_no_ext="img", extension="png", counter=7)
+    assert out == "007_img"
+
+    # ext-template rendering
+    out = render_template("[E]", name_no_ext="x", extension="JPG", counter=1)
+    assert out == "JPG"
+
+
+def test_F1_9_build_preview_increments_counter(tmp_path: Path) -> None:
+    from multipane_commander.ui.multi_rename_dialog import build_preview
+
+    a = tmp_path / "alpha.txt"
+    b = tmp_path / "beta.md"
+    a.touch()
+    b.touch()
+
+    previews = build_preview([a, b], name_template="file_[C]", ext_template="[E]")
+
+    assert previews[0].target.name == "file_1.txt"
+    assert previews[1].target.name == "file_2.md"
+    assert all(not p.collision for p in previews)
+
+
+def test_F1_9_build_preview_flags_collisions(tmp_path: Path) -> None:
+    from multipane_commander.ui.multi_rename_dialog import build_preview
+
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.touch()
+    b.touch()
+    # both rename to same target
+    previews = build_preview([a, b], name_template="same", ext_template="[E]")
+
+    targets = [p.target.name for p in previews]
+    assert targets == ["same.txt", "same.txt"]
+    # Second one collides because the first claimed that name in this batch
+    assert previews[1].collision is True
+
+
+def test_F1_9_apply_renames_executes_and_records(tmp_path: Path) -> None:
+    from multipane_commander.ui.multi_rename_dialog import apply_renames, build_preview
+
+    a = tmp_path / "old1.txt"
+    b = tmp_path / "old2.txt"
+    a.write_text("1")
+    b.write_text("2")
+
+    previews = build_preview([a, b], name_template="new_[C]", ext_template="[E]")
+    recorded: list[tuple[Path, Path]] = []
+
+    def fake_rename(src: Path, dst: Path) -> None:
+        src.rename(dst)
+
+    succeeded, errors = apply_renames(
+        previews, rename=fake_rename, on_record=lambda s, d: recorded.append((s, d))
+    )
+
+    assert succeeded == 2
+    assert errors == []
+    assert (tmp_path / "new_1.txt").exists()
+    assert (tmp_path / "new_2.txt").exists()
+    assert len(recorded) == 2
+
+
 def test_F1_11_undo_stack_records_rename_and_inverts(tmp_path: Path) -> None:
     from multipane_commander.services.undo import UndoRecord, UndoStack
 

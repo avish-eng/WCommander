@@ -41,6 +41,7 @@ from multipane_commander.ui.themes import (
     builtin_themes,
     resolve_theme_definition,
 )
+from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_renames
 from multipane_commander.ui.transfer_dialog import TransferDialog
 
 
@@ -292,6 +293,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Alt+Down"), self, activated=self._focus_pane_down)
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_last_operation)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_last_operation)
+        QShortcut(QKeySequence("Ctrl+M"), self, activated=self._multi_rename_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
@@ -1319,6 +1321,29 @@ class MainWindow(QMainWindow):
             return
         self._set_active_pane(best_index)
         self.pane_views[best_index].focus_list()
+
+    def _multi_rename_in_active_pane(self) -> None:
+        pane = self._active_pane()
+        paths = pane.selected_paths()
+        if not paths:
+            return
+        dialog = MultiRenameDialog(paths, parent=self)
+        if dialog.exec() != MultiRenameDialog.DialogCode.Accepted:
+            return
+        previews = dialog.previews()
+        succeeded, errors = apply_renames(
+            previews,
+            rename=self.fs.rename_entry,
+            on_record=lambda src, dst: self.undo_stack.push(
+                UndoRecord(kind="rename", source=src, destination=dst)
+            ),
+        )
+        pane.refresh()
+        if errors:
+            self._show_error(
+                "Multi-rename completed with errors",
+                f"Renamed {succeeded} item(s).\n\n" + "\n".join(errors[:10]),
+            )
 
     def _undo_last_operation(self) -> None:
         record = self.undo_stack.pop()
