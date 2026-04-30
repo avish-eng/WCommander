@@ -242,6 +242,48 @@ def test_R10_ctrl_r_emits_refresh(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_F1_7_quick_filter_hides_non_matching_entries(tmp_path: Path) -> None:
+    (tmp_path / "alpha.txt").write_text("a")
+    (tmp_path / "beta.txt").write_text("b")
+    (tmp_path / "betacarotene.txt").write_text("c")
+    pane = _make_pane(tmp_path)
+
+    pane.show_quick_filter()
+    pane._quick_filter_bar.setText("beta")
+
+    visible_labels: set[str] = set()
+    for row in range(pane.file_list.topLevelItemCount()):
+        item = pane.file_list.topLevelItem(row)
+        if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+            continue
+        if not item.isHidden():
+            visible_labels.add(item.text(0).lower())
+
+    assert visible_labels == {"beta.txt", "betacarotene.txt"}
+
+
+def test_F1_7_quick_filter_clear_restores_all(tmp_path: Path) -> None:
+    (tmp_path / "alpha.txt").write_text("a")
+    (tmp_path / "beta.txt").write_text("b")
+    pane = _make_pane(tmp_path)
+    pane.show_quick_filter()
+    pane._quick_filter_bar.setText("xyz")
+
+    pane.hide_quick_filter(clear=True)
+    pane._apply_quick_filter("")
+
+    visible: list[str] = []
+    for row in range(pane.file_list.topLevelItemCount()):
+        item = pane.file_list.topLevelItem(row)
+        if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+            continue
+        if not item.isHidden():
+            visible.append(item.text(0).lower())
+
+    assert "alpha.txt" in visible
+    assert "beta.txt" in visible
+
+
 def test_F1_6_type_to_jump_jumps_to_first_match(tmp_path: Path) -> None:
     (tmp_path / "alpha.txt").write_text("a")
     (tmp_path / "beta.txt").write_text("b")

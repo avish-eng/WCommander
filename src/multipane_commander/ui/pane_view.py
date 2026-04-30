@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -97,6 +98,12 @@ class PaneView(QFrame):
         self._type_to_jump_timer.setSingleShot(True)
         self._type_to_jump_timer.setInterval(750)
         self._type_to_jump_timer.timeout.connect(self._reset_type_to_jump)
+        self._quick_filter_text: str = ""
+        self._quick_filter_bar = QLineEdit()
+        self._quick_filter_bar.setPlaceholderText("Filter (Esc to clear)")
+        self._quick_filter_bar.setVisible(False)
+        self._quick_filter_bar.textChanged.connect(self._apply_quick_filter)
+        self._quick_filter_bar.installEventFilter(self)
         self.theme_palette = build_palette(builtin_themes()[0])
         self._thumbnail_size_presets = {
             "Small": {"icon": QSize(96, 72), "grid": QSize(122, 124)},
@@ -223,6 +230,7 @@ class PaneView(QFrame):
         layout.addLayout(title_row)
         layout.addLayout(location_row)
         layout.addWidget(self.breadcrumb_host)
+        layout.addWidget(self._quick_filter_bar)
         layout.addWidget(self.content_stack, 1)
         layout.addWidget(self.status)
 
@@ -875,6 +883,14 @@ class PaneView(QFrame):
                     )
                     event.acceptProposedAction()
                     return True
+        if watched is self._quick_filter_bar and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.hide_quick_filter(clear=True)
+                self._apply_quick_filter("")
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.hide_quick_filter(clear=False)
+                return True
         if watched in {self.file_list, self.thumbnail_list} and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Insert, Qt.Key.Key_Space):
                 self._toggle_current_selection()
@@ -936,6 +952,30 @@ class PaneView(QFrame):
             return None
         path = self._item_data(item, Qt.ItemDataRole.UserRole)
         return path if isinstance(path, Path) else None
+
+    def show_quick_filter(self) -> None:
+        self._quick_filter_bar.setVisible(True)
+        self._quick_filter_bar.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._quick_filter_bar.selectAll()
+
+    def hide_quick_filter(self, *, clear: bool = True) -> None:
+        if clear:
+            self._quick_filter_bar.clear()
+        self._quick_filter_bar.setVisible(False)
+        self.file_list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _apply_quick_filter(self, text: str) -> None:
+        self._quick_filter_text = text.strip().lower()
+        for row in range(self.file_list.topLevelItemCount()):
+            item = self.file_list.topLevelItem(row)
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) != "entry":
+                item.setHidden(False)
+                continue
+            if not self._quick_filter_text:
+                item.setHidden(False)
+                continue
+            label = item.text(0).lower()
+            item.setHidden(self._quick_filter_text not in label)
 
     def _maybe_type_to_jump(self, event) -> bool:
         if event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier:

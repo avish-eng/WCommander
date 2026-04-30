@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (P2 #14) `Ctrl+Enter` / `Ctrl+Return` pastes the cursor item's name into the terminal input; `Alt+Enter` / `Alt+Return` pastes the full path. The terminal dock is revealed and focused if hidden. Names with spaces or shell metacharacters are double-quoted defensively.
 - (P1 #8) `Alt+F1` / `Alt+F2` pop up a drive/mount menu for the active / passive pane (the most-used Total Commander shortcut after F5/F6). Selecting an entry navigates that pane; reuses the existing `platform.root_paths()` so behaviour matches the folder browser.
 - (P1 #6) Type-to-jump quick search in panes (SPEC §6.4). Typing a printable character with no modifier (other than Shift) advances the cursor to the first entry whose name starts with the typed prefix; subsequent characters extend the prefix; an inactivity timeout (750 ms) clears the buffer.
+- (P1 #7) `Ctrl+S` quick-filter bar (SPEC §6.4). Reveals an inline `QLineEdit` at the top of the active pane; typing narrows the visible entries by case-insensitive substring match; `Esc` clears and dismisses the bar; `Enter` dismisses while keeping the filter applied.
 
 ### Verified
 
