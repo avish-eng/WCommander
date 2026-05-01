@@ -37,8 +37,15 @@ class TerminalConfig:
 
 
 @dataclass(slots=True)
+class AiConfig:
+    enabled: bool = True
+    model: str = ""  # "" = use Claude Code / SDK default
+
+
+@dataclass(slots=True)
 class AppConfig:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
+    ai: AiConfig = field(default_factory=AiConfig)
     follow_active_pane_terminal: bool = True
     show_terminal: bool = True

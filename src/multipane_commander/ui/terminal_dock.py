@@ -313,6 +313,17 @@ class TerminalDock(QFrame):
         if self.isVisible():
             self.focus_input()
 
+    def inject_command(self, cwd: str, command: str) -> None:
+        """Navigate PTY to cwd and run command. Starts session if not running."""
+        path = Path(cwd)
+        if not self.session.backend.is_running():
+            self.session.start()
+        self.session.change_directory(path)
+        self._run_command(command)
+        if not self.isVisible():
+            self.setVisible(True)
+            self.focus_input()
+
     def set_maximized(self, maximized: bool) -> None:
         self._is_maximized = maximized
         self.maximize_button.setText("Exit Full Screen" if maximized else "Full Screen")

@@ -10,7 +10,6 @@ from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -23,12 +22,14 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.ui.dialogs import TextEntryDialog, ask_confirmation, show_message
 from multipane_commander.bootstrap import AppContext, persist_app_context
+from multipane_commander.services.ai import AgentRunner, PaneRoots
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
 from multipane_commander.services.undo import UndoRecord, UndoStack
 from multipane_commander.platform import root_paths, root_section_label, same_filesystem
+from multipane_commander.ui.command_bar import CommandBar
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
@@ -41,6 +42,9 @@ from multipane_commander.ui.themes import (
     builtin_themes,
     resolve_theme_definition,
 )
+from multipane_commander.ui.ai_palette import AiPaletteDialog
+from multipane_commander.ui.ai_pane import AiPane
+from multipane_commander.ui.claude_terminal import ClaudeSessionCache
 from multipane_commander.ui.find_files_dialog import FindFilesDialog
 from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_renames
 from multipane_commander.ui.transfer_dialog import TransferDialog
@@ -131,7 +135,12 @@ class MainWindow(QMainWindow):
         self.bookmark_store = BookmarkStore(initial_paths=self.context.state.bookmarks)
         self.job_manager = JobManager(self)
         self.undo_stack = UndoStack()
+        self._ai_runner: AgentRunner | None = None
+        self._ai_palette: AiPaletteDialog | None = None
+        self._ai_pane: AiPane | None = None
+        self._claude_cache: ClaudeSessionCache | None = None
         self.root_layout: QVBoxLayout | None = None
+        self.command_bar: CommandBar | None = None
         self.panes_host: QWidget | None = None
         self.function_bar: QWidget | None = None
         self.pane_splitter: QSplitter | None = None
@@ -164,6 +173,7 @@ class MainWindow(QMainWindow):
         if self.context.state.window.is_maximized:
             self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self._bind_shortcuts()
+        self._bind_command_bar()
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
         self._bind_job_signals()
         self.bookmark_store.bookmarks_changed.connect(self._persist_bookmarks)
@@ -180,6 +190,7 @@ class MainWindow(QMainWindow):
         self.terminal_placeholder.setMinimumHeight(0)
 
         self.panes_host = self._build_panes()
+
         content_splitter = QSplitter(Qt.Orientation.Vertical)
         content_splitter.setObjectName("contentSplitter")
         content_splitter.setChildrenCollapsible(False)
@@ -188,12 +199,17 @@ class MainWindow(QMainWindow):
         content_splitter.setStretchFactor(0, 1)
         content_splitter.setStretchFactor(1, 0)
         content_splitter.splitterMoved.connect(lambda *_args: self._update_layout_chip())
-        if self.context.state.layout.content_splitter_sizes:
-            content_splitter.setSizes(self.context.state.layout.content_splitter_sizes)
+        saved = self.context.state.layout.content_splitter_sizes
+        if saved and len(saved) >= 2:
+            content_splitter.setSizes(list(saved[:2]))
         else:
             content_splitter.setSizes([760, 260])
         self.content_splitter = content_splitter
         root_layout.addWidget(content_splitter, 1)
+
+        self.command_bar = CommandBar()
+        root_layout.addWidget(self.command_bar)
+
         self.jobs_view.setVisible(False)
         root_layout.addWidget(self.jobs_view)
         self.function_bar = build_function_key_bar(
@@ -209,12 +225,15 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.splitterMoved.connect(lambda *_args: self._update_layout_chip())
 
+        self._claude_cache = ClaudeSessionCache(self)
+
         for index, pane_state in enumerate(self.context.state.panes):
             pane_view = PaneView(
                 pane_state=pane_state,
                 bookmark_store=self.bookmark_store,
                 active=index == self.context.state.layout.active_pane_index,
             )
+            pane_view.init_claude_terminal(self._claude_cache)
             pane_view.activated.connect(self._on_pane_activated)
             pane_view.operation_requested.connect(self._handle_operation_request)
             pane_view.preferences_changed.connect(lambda: persist_app_context(self.context))
@@ -225,9 +244,13 @@ class MainWindow(QMainWindow):
             pane_view.current_path_changed.connect(
                 lambda _path, source_pane=pane_view: self._sync_quick_view(source_pane)
             )
+            pane_view.current_path_changed.connect(
+                lambda _path, source_pane=pane_view: self._sync_ai_pane(source_pane)
+            )
             pane_view.current_directory_changed.connect(
                 lambda path, source_pane=pane_view: self._sync_terminal_to_pane_directory(source_pane, path)
             )
+            pane_view.quick_view.ai_badges_changed.connect(self._on_ai_badges_changed)
             pane_view.set_theme_palette(
                 build_palette(
                     resolve_theme_definition(
@@ -238,6 +261,11 @@ class MainWindow(QMainWindow):
             )
             self.pane_views.append(pane_view)
             splitter.addWidget(pane_view)
+
+        ai_pane = AiPane()
+        ai_pane.setVisible(False)
+        splitter.addWidget(ai_pane)
+        self._ai_pane = ai_pane
 
         if self.context.state.layout.pane_splitter_sizes:
             splitter.setSizes(self.context.state.layout.pane_splitter_sizes)
@@ -298,6 +326,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
         QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._toggle_quick_view_raw_mode)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
+        QShortcut(QKeySequence("Ctrl+I"), self, activated=self._toggle_quick_view_ai_mode)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+Tab"), self, activated=self._next_tab_in_active_pane)
@@ -342,6 +371,25 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+`"), self, activated=self._toggle_terminal)
         QShortcut(QKeySequence("Ctrl+Shift+`"), self, activated=self._toggle_terminal_maximized)
         QShortcut(QKeySequence("Ctrl+Shift+K"), self, activated=self._force_kill_terminal_program)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._open_ai_palette)
+        QShortcut(QKeySequence("Ctrl+Shift+I"), self, activated=self._toggle_ai_pane)
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self, activated=self._toggle_ai_chat)
+        QShortcut(QKeySequence("Ctrl+G"), self, activated=self._focus_command_bar)
+
+    def _bind_command_bar(self) -> None:
+        if self.command_bar is None:
+            return
+        for pane_view in self.pane_views:
+            pane_view.current_directory_changed.connect(
+                lambda path, pane=pane_view: self._on_pane_directory_changed(pane, path)
+            )
+            pane_view.file_list.installEventFilter(self)
+        self.command_bar.navigate_requested.connect(self._navigate_active_pane)
+        self.command_bar.refresh_requested.connect(self._refresh_active_pane)
+        self.command_bar.escalate_requested.connect(
+            lambda cwd, cmd: self.terminal_dock.inject_command(cwd, cmd)
+        )
+        self.command_bar.set_cwd(self._active_pane().current_directory())
 
     def _bind_job_signals(self) -> None:
         self.job_manager.job_changed.connect(self.jobs_view.upsert_snapshot)
@@ -481,6 +529,8 @@ class MainWindow(QMainWindow):
             new_active.focus_list()
         self._sync_terminal_to_pane_directory(new_active, new_active.current_directory())
         self._sync_quick_view(new_active)
+        if self.command_bar is not None:
+            self.command_bar.set_cwd(new_active.current_directory())
 
     def _sync_terminal_to_pane_directory(self, pane_view: PaneView, path: Path) -> None:
         if pane_view is not self._active_pane():
@@ -537,6 +587,17 @@ class MainWindow(QMainWindow):
 
     def _refresh_active_pane(self) -> None:
         self._active_pane().refresh()
+
+    def _focus_command_bar(self) -> None:
+        if self.command_bar is not None:
+            self.command_bar.focus_input()
+
+    def _navigate_active_pane(self, path: Path) -> None:
+        self._active_pane().navigate_to(path)
+
+    def _on_pane_directory_changed(self, pane_view: PaneView, path: Path) -> None:
+        if pane_view is self._active_pane() and self.command_bar is not None:
+            self.command_bar.set_cwd(path)
 
     def _new_tab_in_active_pane(self) -> None:
         self._active_pane().open_new_tab()
@@ -810,7 +871,8 @@ class MainWindow(QMainWindow):
         if self.context.state.layout.layout_mode != "stacked":
             self._apply_layout_mode("stacked", persist=False)
         if self.pane_splitter is not None:
-            self.pane_splitter.setSizes([1000, 1000])
+            ai_visible = self._ai_pane is not None and self._ai_pane.isVisible()
+            self.pane_splitter.setSizes([1000, 1000, 500] if ai_visible else [1000, 1000])
         if persist:
             persist_app_context(self.context)
 
@@ -982,10 +1044,100 @@ class MainWindow(QMainWindow):
     def _sync_quick_view(self, source_pane: PaneView) -> None:
         if source_pane is not self._active_pane():
             return
+        roots = self._make_pane_roots()
+        preview_pane = self._passive_pane()
+        if preview_pane.is_quick_view_enabled():
+            preview_pane.set_quick_view_ai_runtime(
+                self._get_or_create_ai_runner(),
+                roots,
+            )
+            preview_pane.set_quick_view_source(source_pane.preview_path())
+        if self._ai_palette is not None and roots is not None:
+            self._ai_palette.update_context(roots)
+
+    def _get_or_create_ai_runner(self) -> AgentRunner | None:
+        if self._ai_runner is None:
+            try:
+                self._ai_runner = AgentRunner(self.context.config.ai, parent=self)
+            except Exception:  # noqa: BLE001
+                return None
+        return self._ai_runner
+
+    def _make_pane_roots(self) -> PaneRoots | None:
+        if len(self.pane_views) < 2:
+            return None
+        try:
+            return PaneRoots(
+                left=self.pane_views[0].current_directory(),
+                right=self.pane_views[1].current_directory(),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _toggle_quick_view_ai_mode(self) -> None:
         preview_pane = self._passive_pane()
         if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_ai_mode()
+
+    def _on_ai_badges_changed(self, paths: frozenset) -> None:
+        self._active_pane().set_ai_processing_paths(paths)
+
+    def _open_ai_palette(self) -> None:
+        runner = self._get_or_create_ai_runner()
+        roots = self._make_pane_roots()
+        if runner is None or roots is None:
             return
-        preview_pane.set_quick_view_source(source_pane.preview_path())
+        if self._ai_palette is None:
+            self._ai_palette = AiPaletteDialog(runner, roots, parent=self)
+        else:
+            self._ai_palette.update_context(roots)
+        if not self._ai_palette.isVisible():
+            # Centre the palette on the main window
+            geo = self.geometry()
+            pw, ph = self._ai_palette.width(), self._ai_palette.height()
+            self._ai_palette.move(
+                geo.x() + (geo.width() - pw) // 2,
+                geo.y() + max(40, (geo.height() - ph) // 3),
+            )
+        self._ai_palette.show_and_focus()
+
+    def _toggle_ai_pane(self) -> None:
+        if self._ai_pane is None:
+            return
+        visible = not self._ai_pane.isVisible()
+        self._ai_pane.setVisible(visible)
+        if visible and self.pane_splitter is not None:
+            sizes = self.pane_splitter.sizes()
+            # Redistribute: give the AI pane ~300px from the right pane
+            total = sum(sizes)
+            ai_share = min(320, max(200, total // 4))
+            left = max(200, (total - ai_share) // 2)
+            right = max(200, total - ai_share - left)
+            self.pane_splitter.setSizes([left, right, ai_share])
+            self._sync_ai_pane(self._active_pane())
+
+    def _sync_ai_pane(self, source_pane: "PaneView") -> None:
+        if source_pane is not self._active_pane():
+            return
+        if self._ai_pane is None or not self._ai_pane.isVisible():
+            return
+        self._ai_pane.set_runtime(self._get_or_create_ai_runner(), self._make_pane_roots())
+        self._ai_pane.set_path(source_pane.current_path())
+
+    def _toggle_ai_chat(self) -> None:
+        passive = self._passive_pane()
+        active = self._active_pane()
+        if passive.is_claude_enabled():
+            passive.set_claude_enabled(False)
+            return
+        # Close CC in every pane — it may have been left open in a pane that
+        # later became active after the user switched panes without closing.
+        for pv in self.pane_views:
+            if pv.is_claude_enabled():
+                pv.set_claude_enabled(False)
+        cwd = active.current_directory()
+        passive.set_claude_enabled(True, cwd, [])
 
     def _copy_from_active_pane(self) -> None:
         self._run_transfer("copy")
@@ -1043,6 +1195,32 @@ class MainWindow(QMainWindow):
     def _terminal_has_focus(self) -> bool:
         focus_widget = QApplication.focusWidget()
         return focus_widget is not None and self.terminal_dock.isAncestorOf(focus_widget)
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and self.command_bar is not None
+            and isinstance(event, QKeyEvent)
+        ):
+            pane_file_lists = [pv.file_list for pv in self.pane_views]
+            if obj in pane_file_lists:
+                key = event.key()
+                mods = event.modifiers()
+                ctrl = Qt.KeyboardModifier.ControlModifier
+                alt = Qt.KeyboardModifier.AltModifier
+                is_printable = (
+                    key >= Qt.Key.Key_Space
+                    and key <= Qt.Key.Key_AsciiTilde
+                    and not (mods & ctrl)
+                    and not (mods & alt)
+                )
+                if is_printable:
+                    char = event.text()
+                    self.command_bar.focus_input(initial_text=char)
+                    return False  # let the file_list also handle it normally
+        return super().eventFilter(obj, event)
 
     def _on_focus_changed(self, _old, _now) -> None:
         self._update_terminal_tab_shortcuts()
@@ -1688,6 +1866,8 @@ class MainWindow(QMainWindow):
             self.context.state.layout.content_splitter_sizes = self.content_splitter.sizes()
         persist_app_context(self.context)
         self.terminal_dock.close_session()
+        if self._claude_cache is not None:
+            self._claude_cache.stop_all()
         super().closeEvent(event)
 
 

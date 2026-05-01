@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multipane_commander.services.ai.cache import has_summary as _has_ai_summary
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.domain.entries import EntryInfo
 from multipane_commander.state.model import PaneState, TabState
@@ -43,6 +44,8 @@ from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.ui.folder_browser import FolderBrowser
 from multipane_commander.ui.quick_view import QuickViewWidget
 from multipane_commander.ui.themes import ThemePalette, build_palette, builtin_themes
+
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 class _CursorRowDelegate(QStyledItemDelegate):
@@ -84,8 +87,38 @@ class _CursorRowDelegate(QStyledItemDelegate):
             opt.state &= ~QStyle.StateFlag.State_MouseOver
             opt.state &= ~QStyle.StateFlag.State_Selected
             super().paint(painter, opt, index)
+        else:
+            super().paint(painter, option, index)
+
+        if index.column() == 0:
+            self._paint_ai_badge(painter, option, index)
+
+    def _paint_ai_badge(self, painter, option, index) -> None:
+        path = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(path, Path):
             return
-        super().paint(painter, option, index)
+        if index.data(Qt.ItemDataRole.UserRole + 1) != "entry":
+            return
+
+        pane = self._pane
+        if path in pane._ai_processing_paths:
+            char = _SPINNER_FRAMES[pane._ai_spinner_frame]
+            color = "#4ec9b0"
+        else:
+            if not _has_ai_summary(path):
+                return
+            char = "✦"
+            color = "#5a7a8a"
+
+        painter.save()
+        painter.setPen(QColor(color))
+        font = QFont()
+        font.setPointSize(14)
+        painter.setFont(font)
+        r = option.rect
+        badge_rect = QRect(r.right() - 26, r.top(), 24, r.height())
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, char)
+        painter.restore()
 
 
 class PaneView(QFrame):
@@ -153,6 +186,12 @@ class PaneView(QFrame):
         self._type_to_jump_timer.setSingleShot(True)
         self._type_to_jump_timer.setInterval(750)
         self._type_to_jump_timer.timeout.connect(self._reset_type_to_jump)
+        self._ai_processing_paths: frozenset[Path] = frozenset()
+        self._ai_spinner_frame: int = 0
+        self._ai_spinner_timer = QTimer(self)
+        self._ai_spinner_timer.setSingleShot(False)
+        self._ai_spinner_timer.setInterval(100)
+        self._ai_spinner_timer.timeout.connect(self._advance_ai_spinner)
         self._quick_filter_text: str = ""
         self._quick_filter_bar = QLineEdit()
         self._quick_filter_bar.setPlaceholderText("Filter (Esc to clear)")
@@ -245,7 +284,8 @@ class PaneView(QFrame):
         )
         self.file_list.setAcceptDrops(True)
         self.file_list.viewport().setAcceptDrops(True)
-        self.file_list.setItemDelegate(_CursorRowDelegate(self, self.file_list))
+        self._file_delegate = _CursorRowDelegate(self, self.file_list)
+        self.file_list.setItemDelegate(self._file_delegate)
         self.file_list.installEventFilter(self)
         self.file_list.viewport().installEventFilter(self)
         self.thumbnail_list.setObjectName("thumbnailList")
@@ -264,7 +304,8 @@ class PaneView(QFrame):
         )
         self.thumbnail_list.setAcceptDrops(True)
         self.thumbnail_list.viewport().setAcceptDrops(True)
-        self.thumbnail_list.setItemDelegate(_CursorRowDelegate(self, self.thumbnail_list))
+        self._thumb_delegate = _CursorRowDelegate(self, self.thumbnail_list)
+        self.thumbnail_list.setItemDelegate(self._thumb_delegate)
         self.thumbnail_list.installEventFilter(self)
         self.thumbnail_list.viewport().installEventFilter(self)
         self.status.setObjectName("paneStatus")
@@ -324,6 +365,33 @@ class PaneView(QFrame):
             return
         self._current_browser_widget().setFocus(Qt.FocusReason.TabFocusReason)
 
+    def init_claude_terminal(self, session_cache: object) -> None:
+        """Create the ClaudeTerminalWidget and add it to content_stack.
+        Called once from MainWindow after pane construction."""
+        from multipane_commander.ui.claude_terminal import ClaudeTerminalWidget  # type: ignore[attr-defined]
+        self.claude_view: ClaudeTerminalWidget = ClaudeTerminalWidget(session_cache)  # type: ignore[assignment]
+        self.content_stack.addWidget(self.claude_view)
+
+    def is_claude_enabled(self) -> bool:
+        return (
+            hasattr(self, "claude_view")
+            and self.content_stack.currentWidget() is self.claude_view
+        )
+
+    def set_claude_enabled(self, enabled: bool, cwd: Path | None = None, extra: list | None = None) -> None:
+        if enabled and cwd is not None and hasattr(self, "claude_view"):
+            # Issue the reset + focus BEFORE making the widget visible so the
+            # terminal is already blank when it appears (no stale-content flash).
+            self.claude_view.show_for(cwd, extra or [])
+            self.content_stack.setCurrentWidget(self.claude_view)
+        elif not enabled:
+            if hasattr(self, "claude_view"):
+                self.claude_view.stop_session()
+            # Restore whichever widget was showing before claude took over
+            self.content_stack.setCurrentWidget(
+                self.quick_view if self.quick_view_enabled else self.content_splitter
+            )
+
     def is_quick_view_enabled(self) -> bool:
         return self.quick_view_enabled
 
@@ -332,6 +400,27 @@ class PaneView(QFrame):
         self.pane_state.quick_view_enabled = enabled
         self.content_stack.setCurrentWidget(self.quick_view if enabled else self.content_splitter)
         self.preferences_changed.emit()
+
+    def set_quick_view_ai_runtime(self, runner: object | None, pane_roots: object | None) -> None:
+        """Pass-through that lets MainWindow wire the AI runner + sandbox roots
+        into this pane's quick-view. Typed `object | None` to avoid pulling
+        the AI service into pane_view's import graph at module load."""
+        self.quick_view.set_ai_runtime(runner, pane_roots)  # type: ignore[arg-type]
+
+    def set_ai_processing_paths(self, paths: frozenset) -> None:
+        self._ai_processing_paths = paths
+        if paths:
+            if not self._ai_spinner_timer.isActive():
+                self._ai_spinner_timer.start()
+        else:
+            self._ai_spinner_timer.stop()
+        self.file_list.viewport().update()
+        self.thumbnail_list.viewport().update()
+
+    def _advance_ai_spinner(self) -> None:
+        self._ai_spinner_frame = (self._ai_spinner_frame + 1) % len(_SPINNER_FRAMES)
+        self.file_list.viewport().update()
+        self.thumbnail_list.viewport().update()
 
     def set_quick_view_source(self, path: Path | None) -> None:
         # Clean up any temp file extracted for the previous archive preview.

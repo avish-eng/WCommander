@@ -367,6 +367,29 @@ F-keys fire globally regardless of focus; printable keys respect focus (so typin
 
 `Ctrl+R` refreshes the active pane (the iconic Norton/TC convention; F2 was the "Refresh" key in the original spec table but conflicted with F2 = Rename, so refresh moved to `Ctrl+R`).
 
+`Ctrl+G` focuses the command bar (see §14.1).
+
+---
+
+### 14.1 Command Bar
+
+A single persistent command bar spans the full width below the pane area, above the Jobs view and F-key bar. It shows the active pane's directory as a shell prompt and lets users run commands without opening the full terminal.
+
+**Activation:** click the input, press `Ctrl+G`, or start typing a printable character while a pane's file list has focus.
+
+**Prompt label:** always reflects the active pane's current directory; updates automatically on navigation and when the active pane switches.
+
+**Enter — inline execution:**
+- `cd` commands are intercepted and navigate the active pane (no subprocess). `cd` with no argument goes to the home directory.
+- All other commands run as a subprocess in the active pane's directory. stdout/stderr stream into a collapsible OutputPanel that appears above the input row (max 150 px, scrollable). The active pane's file list refreshes automatically on process exit.
+- If the cd target does not exist, an error is shown in the OutputPanel and the pane is not navigated.
+
+**Shift+Enter — escalate to terminal:** navigates the TerminalDock PTY to the active pane's directory, injects the command, and opens the dock.
+
+**↑ / ↓ arrows:** cycle in-memory command history (session only, no persistence).
+
+**Esc:** dismisses the OutputPanel if visible; otherwise clears the input; otherwise returns focus to the active pane.
+
 ---
 
 ## 15. File System Abstraction & Plugin-Ready Design

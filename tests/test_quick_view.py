@@ -20,9 +20,17 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Signal as _Signal
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QScrollArea, QWidget as _QWidget
 
+from multipane_commander.services.ai import PaneRoots as _PaneRoots
+from multipane_commander.services.ai.events import (
+    AiError as _AiError,
+    AiResult as _AiResult,
+    TextChunk as _TextChunk,
+    ToolCallStart as _ToolCallStart,
+)
 from multipane_commander.ui.quick_view import QuickViewWidget
 
 
@@ -1088,3 +1096,338 @@ def test_F0_3_web_view_lazy_creation(tmp_path: Path) -> None:
 
     view.web_button.toggle()
     assert view._web_view is not None
+
+
+# ---------------------------------------------------------------------------
+# AI tab (F3 AI mode) tests.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRunner(_QWidget):
+    """Minimal AgentRunner substitute that records calls and exposes signals."""
+
+    event = _Signal(object)
+    session_done = _Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sessions: list[dict] = []
+        self._cancelled: list[str] = []
+        self._next_id = "fake-session-1"
+
+    def start_session(self, *, prompt, system_prompt, allowed_tools, pane_roots):
+        sid = self._next_id
+        self._sessions.append({"id": sid, "prompt": prompt, "tools": allowed_tools})
+        return sid
+
+    def cancel(self, session_id: str) -> None:
+        self._cancelled.append(session_id)
+
+
+def _make_pane_roots(tmp_path: Path) -> _PaneRoots:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir(exist_ok=True)
+    right.mkdir(exist_ok=True)
+    return _PaneRoots(left=left, right=right)
+
+
+def test_F3_ai_button_disabled_without_runner() -> None:
+    """ai_button starts disabled when no AI runner is wired up."""
+    view = _make_widget()
+    assert view.ai_button.isEnabled() is False
+
+
+def test_F3_ai_button_disabled_for_image(tmp_path: Path) -> None:
+    """Images are not summarizable: ai_button must stay disabled."""
+    image_path = tmp_path / "photo.png"
+    _make_png(image_path)
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(image_path)
+
+    assert view.ai_button.isEnabled() is False
+
+
+def test_F3_ai_button_enabled_for_text_file(tmp_path: Path) -> None:
+    """A plain text file makes the ai_button available."""
+    target = tmp_path / "notes.txt"
+    target.write_text("hello world", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+
+    assert view.ai_button.isEnabled() is True
+
+
+def test_F3_ai_button_enabled_for_python_source(tmp_path: Path) -> None:
+    target = tmp_path / "script.py"
+    target.write_text("print('hi')\n", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+
+    assert view.ai_button.isEnabled() is True
+
+
+def test_F3_ai_toggle_switches_stack_to_ai_view(tmp_path: Path) -> None:
+    """Checking the AI toggle must show the ai_view page."""
+    target = tmp_path / "notes.txt"
+    target.write_text("content", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+
+    view.ai_button.setChecked(True)
+
+    assert view.stack.currentWidget() is view.ai_view
+    assert len(runner._sessions) == 1
+    assert runner._sessions[0]["tools"] == ["Read"]
+
+
+def test_F3_ai_toggle_off_restores_prior_widget(tmp_path: Path) -> None:
+    """Unchecking AI must bring back the widget that was showing before."""
+    target = tmp_path / "notes.txt"
+    target.write_text("content", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    prior = view.stack.currentWidget()
+
+    view.ai_button.setChecked(True)
+    assert view.stack.currentWidget() is view.ai_view
+
+    view.ai_button.setChecked(False)
+    assert view.stack.currentWidget() is prior
+
+
+def test_F3_ai_text_chunk_streams_into_view(tmp_path: Path) -> None:
+    """TextChunk events with the active session_id must appear in ai_text_view."""
+    target = tmp_path / "readme.md"
+    target.write_text("# readme", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    runner.event.emit(_TextChunk(session_id=sid, text="Hello "))
+    runner.event.emit(_TextChunk(session_id=sid, text="world"))
+
+    assert view.ai_text_view.toPlainText() == "Hello world"
+
+
+def test_F3_ai_stale_session_chunks_ignored(tmp_path: Path) -> None:
+    """Events for a different session_id must not pollute the display."""
+    target = tmp_path / "notes.txt"
+    target.write_text("x", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    runner.event.emit(_TextChunk(session_id="old-session-id", text="stale"))
+
+    assert view.ai_text_view.toPlainText() == ""
+
+
+def test_F3_ai_tool_call_updates_status_label(tmp_path: Path) -> None:
+    target = tmp_path / "script.py"
+    target.write_text("pass\n", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    runner.event.emit(_ToolCallStart(session_id=sid, tool_use_id="tu_1", name="Read", input={}))
+
+    assert "Read" in view.ai_status_label.text()
+
+
+def test_F3_ai_session_done_completed(tmp_path: Path) -> None:
+    """A completed AiResult hides cancel, shows retry, updates status label."""
+    target = tmp_path / "notes.txt"
+    target.write_text("stuff", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    runner.event.emit(_TextChunk(session_id=sid, text="A summary."))
+    runner.session_done.emit(
+        _AiResult(session_id=sid, status="completed", text="A summary.", tool_calls=1)
+    )
+
+    assert view.ai_cancel_button.isHidden() is True
+    assert view.ai_retry_button.isHidden() is False
+    assert view.ai_status_label.text() == "Summary"
+
+
+def test_F3_ai_session_done_error_shows_error(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("stuff", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    runner.session_done.emit(
+        _AiResult(session_id=sid, status="error", text="", tool_calls=0, error="timeout")
+    )
+
+    assert "timeout" in view.ai_status_label.text()
+    assert view.ai_cancel_button.isHidden() is True
+    assert view.ai_retry_button.isHidden() is False
+
+
+def test_F3_ai_cancel_button_calls_runner_cancel(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("stuff", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    view.ai_cancel_button.click()
+
+    assert sid in runner._cancelled
+
+
+def test_F3_ai_cache_hit_skips_second_session(tmp_path: Path, monkeypatch) -> None:
+    """Second toggle open of the same file uses the cached text (no new session)."""
+    import multipane_commander.ui.quick_view as _qv_mod
+
+    # Redirect disk cache to tmp_path so tests are hermetic.
+    _store: dict[str, str] = {}
+
+    def _fake_load(path):
+        import multipane_commander.services.ai.cache as _c
+        k = _c._key(path)
+        return _store.get(k) if k else None
+
+    def _fake_save(path, text):
+        import multipane_commander.services.ai.cache as _c
+        k = _c._key(path)
+        if k:
+            _store[k] = text
+
+    monkeypatch.setattr(_qv_mod, "load_summary", _fake_load)
+    monkeypatch.setattr(_qv_mod, "save_summary", _fake_save)
+
+    target = tmp_path / "notes.txt"
+    target.write_text("original content", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    # Simulate session completing with text.
+    sid = runner._sessions[0]["id"]
+    runner.event.emit(_TextChunk(session_id=sid, text="Cached summary text."))
+    runner.session_done.emit(
+        _AiResult(session_id=sid, status="completed", text="Cached summary text.", tool_calls=0)
+    )
+
+    # Toggle off then on again — same file.
+    view.ai_button.setChecked(False)
+    view.ai_button.setChecked(True)
+
+    # Only one session was ever started; status label confirms cache hit.
+    assert len(runner._sessions) == 1
+    assert "Cached" in view.ai_status_label.text()
+
+
+def test_F3_ai_show_path_image_auto_unchecks(tmp_path: Path) -> None:
+    """Navigating to an unsummarizable file while AI is on must uncheck the button."""
+    text_path = tmp_path / "notes.txt"
+    text_path.write_text("text", encoding="utf-8")
+    image_path = tmp_path / "photo.png"
+    _make_png(image_path)
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(text_path)
+    view.ai_button.setChecked(True)
+
+    view.show_path(image_path)
+
+    assert view.ai_button.isChecked() is False
+    assert view.ai_button.isEnabled() is False
+    assert view.stack.currentWidget() is view.image_scroll
+
+
+def test_F3_ai_error_event_shown_in_status(tmp_path: Path) -> None:
+    """AiError events update the status label."""
+    target = tmp_path / "notes.txt"
+    target.write_text("content", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    view.ai_button.setChecked(True)
+
+    sid = runner._sessions[0]["id"]
+    runner.event.emit(_AiError(session_id=sid, message="transport failed"))
+
+    assert "transport failed" in view.ai_status_label.text()
+
+
+def test_F3_ai_set_runtime_none_disables_button(tmp_path: Path) -> None:
+    """Passing (None, None) to set_ai_runtime must disable the AI button."""
+    target = tmp_path / "notes.txt"
+    target.write_text("content", encoding="utf-8")
+
+    runner = _FakeRunner()
+    roots = _make_pane_roots(tmp_path)
+    view = _make_widget()
+    view.set_ai_runtime(runner, roots)
+    view.show_path(target)
+    assert view.ai_button.isEnabled() is True
+
+    view.set_ai_runtime(None, None)
+
+    assert view.ai_button.isEnabled() is False
