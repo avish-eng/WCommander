@@ -365,6 +365,31 @@ class PaneView(QFrame):
             return
         self._current_browser_widget().setFocus(Qt.FocusReason.TabFocusReason)
 
+    def init_claude_terminal(self, session_cache: object) -> None:
+        """Create the ClaudeTerminalWidget and add it to content_stack.
+        Called once from MainWindow after pane construction."""
+        from multipane_commander.ui.claude_terminal import ClaudeTerminalWidget  # type: ignore[attr-defined]
+        self.claude_view: ClaudeTerminalWidget = ClaudeTerminalWidget(session_cache)  # type: ignore[assignment]
+        self.content_stack.addWidget(self.claude_view)
+
+    def is_claude_enabled(self) -> bool:
+        return (
+            hasattr(self, "claude_view")
+            and self.content_stack.currentWidget() is self.claude_view
+        )
+
+    def set_claude_enabled(self, enabled: bool, cwd: Path | None = None, extra: list | None = None) -> None:
+        if enabled and cwd is not None and hasattr(self, "claude_view"):
+            self.content_stack.setCurrentWidget(self.claude_view)
+            self.claude_view.show_for(cwd, extra or [])  # focus happens inside show_for
+        elif not enabled:
+            if hasattr(self, "claude_view"):
+                self.claude_view.stop_session()
+            # Restore whichever widget was showing before claude took over
+            self.content_stack.setCurrentWidget(
+                self.quick_view if self.quick_view_enabled else self.content_splitter
+            )
+
     def is_quick_view_enabled(self) -> bool:
         return self.quick_view_enabled
 

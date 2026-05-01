@@ -44,7 +44,7 @@ from multipane_commander.ui.themes import (
 )
 from multipane_commander.ui.ai_palette import AiPaletteDialog
 from multipane_commander.ui.ai_pane import AiPane
-from multipane_commander.ui.claude_terminal import ClaudeTerminalDock
+from multipane_commander.ui.claude_terminal import ClaudeSessionCache
 from multipane_commander.ui.find_files_dialog import FindFilesDialog
 from multipane_commander.ui.multi_rename_dialog import MultiRenameDialog, apply_renames
 from multipane_commander.ui.transfer_dialog import TransferDialog
@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
         self._ai_runner: AgentRunner | None = None
         self._ai_palette: AiPaletteDialog | None = None
         self._ai_pane: AiPane | None = None
-        self._ai_chat: ClaudeTerminalDock | None = None
+        self._claude_cache: ClaudeSessionCache | None = None
         self.root_layout: QVBoxLayout | None = None
         self.command_bar: CommandBar | None = None
         self.panes_host: QWidget | None = None
@@ -190,6 +190,7 @@ class MainWindow(QMainWindow):
         self.terminal_placeholder.setMinimumHeight(0)
 
         self.panes_host = self._build_panes()
+
         content_splitter = QSplitter(Qt.Orientation.Vertical)
         content_splitter.setObjectName("contentSplitter")
         content_splitter.setChildrenCollapsible(False)
@@ -198,8 +199,9 @@ class MainWindow(QMainWindow):
         content_splitter.setStretchFactor(0, 1)
         content_splitter.setStretchFactor(1, 0)
         content_splitter.splitterMoved.connect(lambda *_args: self._update_layout_chip())
-        if self.context.state.layout.content_splitter_sizes:
-            content_splitter.setSizes(self.context.state.layout.content_splitter_sizes)
+        saved = self.context.state.layout.content_splitter_sizes
+        if saved and len(saved) >= 2:
+            content_splitter.setSizes(list(saved[:2]))
         else:
             content_splitter.setSizes([760, 260])
         self.content_splitter = content_splitter
@@ -210,10 +212,6 @@ class MainWindow(QMainWindow):
 
         self.jobs_view.setVisible(False)
         root_layout.addWidget(self.jobs_view)
-        self._ai_chat = ClaudeTerminalDock()
-        self._ai_chat.setObjectName("claudeTerminalDock")
-        self._ai_chat.setVisible(False)
-        root_layout.addWidget(self._ai_chat)
         self.function_bar = build_function_key_bar(
             actions=self._function_key_actions(),
             extra_widget=self._build_theme_controls(),
@@ -227,12 +225,15 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.splitterMoved.connect(lambda *_args: self._update_layout_chip())
 
+        self._claude_cache = ClaudeSessionCache(self)
+
         for index, pane_state in enumerate(self.context.state.panes):
             pane_view = PaneView(
                 pane_state=pane_state,
                 bookmark_store=self.bookmark_store,
                 active=index == self.context.state.layout.active_pane_index,
             )
+            pane_view.init_claude_terminal(self._claude_cache)
             pane_view.activated.connect(self._on_pane_activated)
             pane_view.operation_requested.connect(self._handle_operation_request)
             pane_view.preferences_changed.connect(lambda: persist_app_context(self.context))
@@ -1053,8 +1054,6 @@ class MainWindow(QMainWindow):
             preview_pane.set_quick_view_source(source_pane.preview_path())
         if self._ai_palette is not None and roots is not None:
             self._ai_palette.update_context(roots)
-        if self._ai_chat is not None and self._ai_chat.isVisible() and roots is not None:
-            self._ai_chat.update_pane_roots(roots)
 
     def _get_or_create_ai_runner(self) -> AgentRunner | None:
         if self._ai_runner is None:
@@ -1127,14 +1126,13 @@ class MainWindow(QMainWindow):
         self._ai_pane.set_path(source_pane.current_path())
 
     def _toggle_ai_chat(self) -> None:
-        if self._ai_chat is None:
-            return
-        visible = not self._ai_chat.isVisible()
-        self._ai_chat.setVisible(visible)
-        if visible:
-            self._ai_chat.set_runtime(
-                self._get_or_create_ai_runner(), self._make_pane_roots()
-            )
+        passive = self._passive_pane()
+        active = self._active_pane()
+        if passive.is_claude_enabled():
+            passive.set_claude_enabled(False)
+        else:
+            cwd = active.current_directory()
+            passive.set_claude_enabled(True, cwd, [])
 
     def _copy_from_active_pane(self) -> None:
         self._run_transfer("copy")
@@ -1863,8 +1861,8 @@ class MainWindow(QMainWindow):
             self.context.state.layout.content_splitter_sizes = self.content_splitter.sizes()
         persist_app_context(self.context)
         self.terminal_dock.close_session()
-        if self._ai_chat is not None:
-            self._ai_chat.close_session()
+        if self._claude_cache is not None:
+            self._claude_cache.stop_all()
         super().closeEvent(event)
 
 
