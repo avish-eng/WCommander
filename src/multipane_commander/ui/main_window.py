@@ -10,7 +10,6 @@ from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.ui.dialogs import TextEntryDialog, ask_confirmation, show_message
 from multipane_commander.bootstrap import AppContext, persist_app_context
+from multipane_commander.services.ai import AgentRunner, PaneRoots
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self.bookmark_store = BookmarkStore(initial_paths=self.context.state.bookmarks)
         self.job_manager = JobManager(self)
         self.undo_stack = UndoStack()
+        self._ai_runner: AgentRunner | None = None
         self.root_layout: QVBoxLayout | None = None
         self.panes_host: QWidget | None = None
         self.function_bar: QWidget | None = None
@@ -298,6 +299,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
         QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._toggle_quick_view_raw_mode)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
+        QShortcut(QKeySequence("Ctrl+I"), self, activated=self._toggle_quick_view_ai_mode)
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
         QShortcut(QKeySequence("Ctrl+Tab"), self, activated=self._next_tab_in_active_pane)
@@ -985,7 +987,36 @@ class MainWindow(QMainWindow):
         preview_pane = self._passive_pane()
         if not preview_pane.is_quick_view_enabled():
             return
+        preview_pane.set_quick_view_ai_runtime(
+            self._get_or_create_ai_runner(),
+            self._make_pane_roots(),
+        )
         preview_pane.set_quick_view_source(source_pane.preview_path())
+
+    def _get_or_create_ai_runner(self) -> AgentRunner | None:
+        if self._ai_runner is None:
+            try:
+                self._ai_runner = AgentRunner(self.context.config.ai, parent=self)
+            except Exception:  # noqa: BLE001
+                return None
+        return self._ai_runner
+
+    def _make_pane_roots(self) -> PaneRoots | None:
+        if len(self.pane_views) < 2:
+            return None
+        try:
+            return PaneRoots(
+                left=self.pane_views[0].current_directory(),
+                right=self.pane_views[1].current_directory(),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _toggle_quick_view_ai_mode(self) -> None:
+        preview_pane = self._passive_pane()
+        if not preview_pane.is_quick_view_enabled():
+            self._show_passive_quick_view()
+        preview_pane.quick_view.toggle_ai_mode()
 
     def _copy_from_active_pane(self) -> None:
         self._run_transfer("copy")

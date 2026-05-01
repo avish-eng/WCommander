@@ -16,6 +16,7 @@ dependencies = [
   "libarchive-c",
   "watchdog",
   "pygments",
+  "claude-agent-sdk",
 ]
 
 [project.optional-dependencies]

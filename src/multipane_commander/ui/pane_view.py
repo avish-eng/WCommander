@@ -333,6 +333,12 @@ class PaneView(QFrame):
         self.content_stack.setCurrentWidget(self.quick_view if enabled else self.content_splitter)
         self.preferences_changed.emit()
 
+    def set_quick_view_ai_runtime(self, runner: object | None, pane_roots: object | None) -> None:
+        """Pass-through that lets MainWindow wire the AI runner + sandbox roots
+        into this pane's quick-view. Typed `object | None` to avoid pulling
+        the AI service into pane_view's import graph at module load."""
+        self.quick_view.set_ai_runtime(runner, pane_roots)  # type: ignore[arg-type]
+
     def set_quick_view_source(self, path: Path | None) -> None:
         # Clean up any temp file extracted for the previous archive preview.
         if self._quick_view_temp_path is not None:

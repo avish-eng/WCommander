@@ -4,7 +4,13 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from multipane_commander.config.model import AppConfig, TerminalConfig, ThemeConfig, ThemeDefinition
+from multipane_commander.config.model import (
+    AiConfig,
+    AppConfig,
+    TerminalConfig,
+    ThemeConfig,
+    ThemeDefinition,
+)
 from multipane_commander.platform import app_data_dir
 
 
@@ -70,6 +76,12 @@ def load_config() -> AppConfig:
     if not isinstance(terminal_payload, dict):
         terminal_payload = {}
 
+    ai_payload = payload.get("ai", {})
+    if not isinstance(ai_payload, dict):
+        ai_payload = {}
+    ai_model_raw = ai_payload.get("model", "")
+    ai_model = ai_model_raw if isinstance(ai_model_raw, str) else ""
+
     return AppConfig(
         theme=ThemeConfig(
             selected_theme_id=legacy_theme_name,
@@ -80,6 +92,10 @@ def load_config() -> AppConfig:
             bookmarked_commands=_string_list(terminal_payload.get("bookmarked_commands", [])),
             history_panel_visible=_safe_bool(terminal_payload.get("history_panel_visible"), False),
             experimental_pty=_safe_bool(terminal_payload.get("experimental_pty"), False),
+        ),
+        ai=AiConfig(
+            enabled=_safe_bool(ai_payload.get("enabled"), True),
+            model=ai_model,
         ),
         follow_active_pane_terminal=_safe_bool(
             payload.get("follow_active_pane_terminal"),
@@ -122,6 +138,10 @@ def save_config(config: AppConfig) -> None:
             "bookmarked_commands": config.terminal.bookmarked_commands,
             "history_panel_visible": config.terminal.history_panel_visible,
             "experimental_pty": config.terminal.experimental_pty,
+        },
+        "ai": {
+            "enabled": config.ai.enabled,
+            "model": config.ai.model,
         },
         "follow_active_pane_terminal": config.follow_active_pane_terminal,
         "show_terminal": config.show_terminal,
