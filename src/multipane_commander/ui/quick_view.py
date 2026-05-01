@@ -83,13 +83,40 @@ def _is_archive_path(path: Path) -> bool:
 _AI_SUMMARIZE_SYSTEM_PROMPT = (
     "You are inspecting a file in a file manager's quick-view pane. "
     "Use the Read tool to view the file at the path the user gives you, "
-    "then write a 2-4 sentence summary of what it is and what it contains. "
-    "For code: say what the module/script does. "
+    "then write a concise summary of what it is and what it contains using Markdown. "
+    "Use headers, bullet points, and inline code where they help readability. "
+    "For code: say what the module/script does and list key functions/classes. "
     "For data files: describe the shape and notable columns. "
-    "For documents: give the gist. "
+    "For documents: give the gist with key points as bullets. "
     "Don't quote the file verbatim. Don't apologize. "
     "If the file is empty, unreadable, or denied by the sandbox, say so plainly."
 )
+
+_MAX_BACKGROUND_AI_SESSIONS = 3
+
+_AI_HTML_TEMPLATE = """\
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{{background:#1e1e1e;color:#d4d4d4;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:13px;line-height:1.65;padding:14px 18px;margin:0}}
+h1,h2,h3{{color:#c8d0e0;margin-top:1.1em;margin-bottom:.3em}}
+h1{{font-size:1.2em}}h2{{font-size:1.1em}}h3{{font-size:1em}}
+code{{background:#2a2d2e;padding:.1em .35em;border-radius:3px;
+  font-family:"SF Mono",Menlo,monospace;font-size:.9em}}
+pre{{background:#2a2d2e;padding:10px 12px;border-radius:4px;overflow-x:auto}}
+pre code{{background:none;padding:0}}
+ul,ol{{padding-left:1.4em;margin:.4em 0}}
+li{{margin:.2em 0}}
+a{{color:#4ec9b0}}
+blockquote{{border-left:3px solid #4ec9b0;margin:0;padding-left:12px;color:#9da5b4}}
+hr{{border:none;border-top:1px solid #3a3a3a;margin:.8em 0}}
+p{{margin:.5em 0}}
+</style></head><body>{body}</body></html>"""
+
+
+def _markdown_to_html(text: str) -> str:
+    import mistune  # local import keeps startup fast
+    return _AI_HTML_TEMPLATE.format(body=mistune.html(text))
 
 
 def _is_ai_summarizable(path: Path) -> bool:
@@ -322,9 +349,12 @@ class QuickViewWidget(QFrame):
         self.ai_view.setObjectName("quickViewAi")
         self.ai_status_label = QLabel("")
         self.ai_status_label.setObjectName("quickViewAiStatus")
+        # Inner stack: index 0 = plain-text streaming view, index 1 = rendered HTML
+        self.ai_inner_stack = QStackedWidget()
         self.ai_text_view = QPlainTextEdit()
         self.ai_text_view.setObjectName("quickViewAiText")
         self.ai_text_view.setReadOnly(True)
+        self.ai_inner_stack.addWidget(self.ai_text_view)   # index 0
         self.ai_cancel_button = QPushButton("Cancel")
         self.ai_cancel_button.setObjectName("quickViewAiCancel")
         self.ai_cancel_button.setVisible(False)
@@ -332,12 +362,12 @@ class QuickViewWidget(QFrame):
         self.ai_retry_button = QPushButton("Retry")
         self.ai_retry_button.setObjectName("quickViewAiRetry")
         self.ai_retry_button.setVisible(False)
-        self.ai_retry_button.clicked.connect(self._start_ai_summary)
+        self.ai_retry_button.clicked.connect(self._on_ai_retry_clicked)
         ai_layout = QVBoxLayout(self.ai_view)
         ai_layout.setContentsMargins(0, 0, 0, 0)
         ai_layout.setSpacing(6)
         ai_layout.addWidget(self.ai_status_label)
-        ai_layout.addWidget(self.ai_text_view, 1)
+        ai_layout.addWidget(self.ai_inner_stack, 1)
         ai_buttons_row = QHBoxLayout()
         ai_buttons_row.addStretch(1)
         ai_buttons_row.addWidget(self.ai_cancel_button)
@@ -379,10 +409,13 @@ class QuickViewWidget(QFrame):
         self._ai_runner: AgentRunner | None = None
         self._ai_pane_roots: PaneRoots | None = None
         self._ai_current_path: Path | None = None
-        self._ai_session_id: str | None = None
-        self._ai_session_path: Path | None = None  # path the active session is for
+        # session_id → file path for every in-flight session (background + active)
+        self._ai_sessions: dict[str, Path] = {}
+        # session whose streaming output is shown in the UI right now
+        self._ai_active_session_id: str | None = None
         self._ai_pre_widget: QWidget | None = None
         self._ai_text_buffer: list[str] = []
+        self._ai_rendered_view: "QWebEngineView | None" = None
         self._apply_size_preset(self.size_picker.currentText())
 
     def is_raw_toggle_available(self) -> bool:
@@ -783,8 +816,9 @@ class QuickViewWidget(QFrame):
             self.stack.setCurrentWidget(self.ai_view)
             self._start_ai_summary()
         else:
-            self._cancel_ai_summary()
-            self._ai_session_id = None
+            self._cancel_all_ai_sessions()
+            self._ai_sessions.clear()
+            self._ai_active_session_id = None
             if self._ai_pre_widget is not None:
                 self.stack.setCurrentWidget(self._ai_pre_widget)
             self._ai_pre_widget = None
@@ -798,50 +832,67 @@ class QuickViewWidget(QFrame):
             self._ai_show_error("AI runtime unavailable.")
             return
 
-        # If we're already summarizing this exact file, don't restart.
-        # _refresh_ai_state is called twice per _sync_quick_view (once from
-        # set_ai_runtime, once from show_path), so this guard prevents the
-        # duplicate sessions that would otherwise be started and immediately cancelled.
-        if self._ai_session_id is not None and self._ai_session_path == self._ai_current_path:
-            return
+        # Already have an in-flight session for this file — reattach to it.
+        # (_refresh_ai_state fires twice per navigation; this prevents duplicates.)
+        for sid, path in self._ai_sessions.items():
+            if path == self._ai_current_path:
+                self._ai_active_session_id = sid
+                return
 
-        # Cancel any in-flight session for a different file (user navigated away).
-        if self._ai_session_id is not None:
-            self._cancel_ai_summary()
-            self._ai_session_id = None
-            self._ai_session_path = None
-
-        # Cache hit: paint instantly, no session.
+        # Cache hit: render instantly, no new session needed.
         cached = load_summary(self._ai_current_path)
         if cached is not None:
-            self.ai_text_view.setPlainText(cached)
+            self._ai_render_markdown(cached)
             self.ai_status_label.setText("Cached summary (no token cost)")
             self.ai_cancel_button.setVisible(False)
             self.ai_retry_button.setVisible(True)
             return
 
-        # Fresh session.
+        # Cap background sessions: cancel the oldest non-active one if full.
+        if len(self._ai_sessions) >= _MAX_BACKGROUND_AI_SESSIONS:
+            oldest = next(
+                (s for s in self._ai_sessions if s != self._ai_active_session_id),
+                None,
+            )
+            if oldest:
+                self._ai_runner.cancel(oldest)
+                self._ai_sessions.pop(oldest, None)
+
+        # Start a fresh session. Previous session for a different file keeps running.
         self._ai_text_buffer.clear()
         self.ai_text_view.clear()
+        self.ai_inner_stack.setCurrentIndex(0)  # show streaming text view
         self.ai_status_label.setText("Summarizing…")
         self.ai_cancel_button.setVisible(True)
         self.ai_retry_button.setVisible(False)
 
         try:
-            self._ai_session_id = self._ai_runner.start_session(
+            sid = self._ai_runner.start_session(
                 prompt=str(self._ai_current_path),
                 system_prompt=_AI_SUMMARIZE_SYSTEM_PROMPT,
                 allowed_tools=["Read"],
                 pane_roots=self._ai_pane_roots,
             )
-            self._ai_session_path = self._ai_current_path
+            self._ai_sessions[sid] = self._ai_current_path
+            self._ai_active_session_id = sid
         except AiUnavailable as exc:
             self._ai_show_error(str(exc))
+
+    def _on_ai_retry_clicked(self) -> None:
+        # Force a fresh session for the current file, discarding any in-flight one.
+        if self._ai_current_path is not None and self._ai_runner is not None:
+            stale = [s for s, p in self._ai_sessions.items() if p == self._ai_current_path]
+            for sid in stale:
+                self._ai_runner.cancel(sid)
+                self._ai_sessions.pop(sid, None)
+            if self._ai_active_session_id in stale:
+                self._ai_active_session_id = None
+        self._start_ai_summary()
 
     def _on_ai_event(self, event: object) -> None:
         if not isinstance(event, (TextChunk, ToolCallStart, AiError)):
             return
-        if getattr(event, "session_id", None) != self._ai_session_id:
+        if getattr(event, "session_id", None) != self._ai_active_session_id:
             return
         if isinstance(event, TextChunk):
             self._ai_text_buffer.append(event.text)
@@ -857,16 +908,26 @@ class QuickViewWidget(QFrame):
     def _on_ai_session_done(self, result: object) -> None:
         if not isinstance(result, AiResult):
             return
-        if result.session_id != self._ai_session_id:
+        sid = result.session_id
+        if sid not in self._ai_sessions:
             return
-        self._ai_session_id = None
-        self._ai_session_path = None
+
+        file_path = self._ai_sessions.pop(sid)
+
+        # Always save completed summaries — even for files we've navigated away from.
+        if result.status == "completed" and result.text:
+            save_summary(file_path, result.text)
+
+        # Only update the UI for the session the user is currently watching.
+        if sid != self._ai_active_session_id:
+            return
+
+        self._ai_active_session_id = None
         self.ai_cancel_button.setVisible(False)
         if result.status == "completed":
+            self._ai_render_markdown(result.text)
             self.ai_status_label.setText("Summary")
             self.ai_retry_button.setVisible(True)
-            if self._ai_current_path is not None and result.text:
-                save_summary(self._ai_current_path, result.text)
         elif result.status == "cancelled":
             self.ai_status_label.setText("Cancelled.")
             self.ai_retry_button.setVisible(True)
@@ -874,11 +935,36 @@ class QuickViewWidget(QFrame):
             self._ai_show_error(result.error or "Summary failed.")
 
     def _cancel_ai_summary(self) -> None:
-        if self._ai_session_id is not None and self._ai_runner is not None:
-            self._ai_runner.cancel(self._ai_session_id)
+        if self._ai_active_session_id is not None and self._ai_runner is not None:
+            self._ai_runner.cancel(self._ai_active_session_id)
+
+    def _cancel_all_ai_sessions(self) -> None:
+        if self._ai_runner is None:
+            return
+        for sid in list(self._ai_sessions):
+            self._ai_runner.cancel(sid)
+
+    def _ensure_ai_rendered_view(self) -> "QWebEngineView":
+        if self._ai_rendered_view is None:
+            assert QWebEngineView is not None
+            view = QWebEngineView()
+            view.setObjectName("quickViewAiRendered")
+            self.ai_inner_stack.addWidget(view)  # index 1
+            self._ai_rendered_view = view
+        return self._ai_rendered_view
+
+    def _ai_render_markdown(self, text: str) -> None:
+        if _WEB_ENGINE_AVAILABLE:
+            view = self._ensure_ai_rendered_view()
+            view.setHtml(_markdown_to_html(text))
+            self.ai_inner_stack.setCurrentWidget(view)
+        else:
+            self.ai_text_view.setPlainText(text)
+            self.ai_inner_stack.setCurrentIndex(0)
 
     def _ai_show_error(self, message: str) -> None:
         self.ai_status_label.setText(f"Error: {message}")
+        self.ai_inner_stack.setCurrentIndex(0)
         self.ai_cancel_button.setVisible(False)
         self.ai_retry_button.setVisible(True)
 

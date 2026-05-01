@@ -17,6 +17,7 @@ dependencies = [
   "watchdog",
   "pygments",
   "claude-agent-sdk",
+  "mistune>=3.0",
 ]
 
 [project.optional-dependencies]
