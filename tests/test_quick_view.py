@@ -1330,8 +1330,27 @@ def test_F3_ai_cancel_button_calls_runner_cancel(tmp_path: Path) -> None:
     assert sid in runner._cancelled
 
 
-def test_F3_ai_cache_hit_skips_second_session(tmp_path: Path) -> None:
+def test_F3_ai_cache_hit_skips_second_session(tmp_path: Path, monkeypatch) -> None:
     """Second toggle open of the same file uses the cached text (no new session)."""
+    import multipane_commander.ui.quick_view as _qv_mod
+
+    # Redirect disk cache to tmp_path so tests are hermetic.
+    _store: dict[str, str] = {}
+
+    def _fake_load(path):
+        import multipane_commander.services.ai.cache as _c
+        k = _c._key(path)
+        return _store.get(k) if k else None
+
+    def _fake_save(path, text):
+        import multipane_commander.services.ai.cache as _c
+        k = _c._key(path)
+        if k:
+            _store[k] = text
+
+    monkeypatch.setattr(_qv_mod, "load_summary", _fake_load)
+    monkeypatch.setattr(_qv_mod, "save_summary", _fake_save)
+
     target = tmp_path / "notes.txt"
     target.write_text("original content", encoding="utf-8")
 

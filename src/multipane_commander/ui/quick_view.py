@@ -42,6 +42,7 @@ from multipane_commander.services.ai import (
     TextChunk,
     ToolCallStart,
 )
+from multipane_commander.services.ai.cache import load_summary, save_summary
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -380,7 +381,6 @@ class QuickViewWidget(QFrame):
         self._ai_current_path: Path | None = None
         self._ai_session_id: str | None = None
         self._ai_pre_widget: QWidget | None = None
-        self._ai_cache: dict[tuple[str, int], str] = {}
         self._ai_text_buffer: list[str] = []
         self._apply_size_preset(self.size_picker.currentText())
 
@@ -804,9 +804,9 @@ class QuickViewWidget(QFrame):
             self._ai_session_id = None
 
         # Cache hit: paint instantly, no session.
-        key = self._ai_cache_key(self._ai_current_path)
-        if key is not None and key in self._ai_cache:
-            self.ai_text_view.setPlainText(self._ai_cache[key])
+        cached = load_summary(self._ai_current_path)
+        if cached is not None:
+            self.ai_text_view.setPlainText(cached)
             self.ai_status_label.setText("Cached summary (no token cost)")
             self.ai_cancel_button.setVisible(False)
             self.ai_retry_button.setVisible(True)
@@ -856,9 +856,7 @@ class QuickViewWidget(QFrame):
             self.ai_status_label.setText("Summary")
             self.ai_retry_button.setVisible(True)
             if self._ai_current_path is not None and result.text:
-                key = self._ai_cache_key(self._ai_current_path)
-                if key is not None:
-                    self._ai_cache[key] = result.text
+                save_summary(self._ai_current_path, result.text)
         elif result.status == "cancelled":
             self.ai_status_label.setText("Cancelled.")
             self.ai_retry_button.setVisible(True)
@@ -873,13 +871,6 @@ class QuickViewWidget(QFrame):
         self.ai_status_label.setText(f"Error: {message}")
         self.ai_cancel_button.setVisible(False)
         self.ai_retry_button.setVisible(True)
-
-    def _ai_cache_key(self, path: Path) -> tuple[str, int] | None:
-        try:
-            st = path.stat()
-            return (str(path.resolve()), st.st_mtime_ns)
-        except OSError:
-            return None
 
     # ----- key handling ---------------------------------------------------
 

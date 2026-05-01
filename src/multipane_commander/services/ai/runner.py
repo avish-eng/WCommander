@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -26,7 +27,9 @@ from multipane_commander.services.ai.events import (
     ToolCallEnd,
     ToolCallStart,
 )
-from multipane_commander.services.ai.sandbox import PaneRoots, make_can_use_tool
+from multipane_commander.services.ai.sandbox import PaneRoots
+
+log = logging.getLogger(__name__)
 
 
 class AiUnavailable(RuntimeError):
@@ -77,12 +80,11 @@ class _AgentWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        log.debug("worker thread started: session=%s", self._session_id)
         try:
             asyncio.run(self._drive())
         except Exception as exc:  # noqa: BLE001
-            # _drive() should catch its own exceptions, but if asyncio.run
-            # itself blows up (e.g., loop creation) we still need to deliver
-            # a finished signal so the manager cleans up the thread.
+            log.exception("asyncio.run blew up for session=%s", self._session_id)
             self.finished.emit(
                 AiResult(
                     session_id=self._session_id,
@@ -92,8 +94,10 @@ class _AgentWorker(QObject):
                     error=f"{type(exc).__name__}: {exc}",
                 )
             )
+        log.debug("worker thread exiting: session=%s", self._session_id)
 
     async def _drive(self) -> None:
+        log.debug("_drive started: session=%s prompt=%.80r", self._session_id, self._prompt)
         text_parts: list[str] = []
         tool_call_count = 0
         usage: dict | None = None
@@ -101,21 +105,14 @@ class _AgentWorker(QObject):
         status: str = "completed"
         error: str | None = None
 
-        async def _prompt_stream():
-            # can_use_tool requires streaming mode (AsyncIterable prompt, not str).
-            yield {
-                "type": "user",
-                "message": {"role": "user", "content": self._prompt},
-                "parent_tool_use_id": None,
-                "session_id": "default",
-            }
-
         try:
-            agen = self._query_fn(prompt=_prompt_stream(), options=self._options)
+            agen = self._query_fn(prompt=self._prompt, options=self._options)
+            log.debug("query iterator created, entering message loop")
             async for message in agen:
+                log.debug("sdk message: %s", type(message).__name__)
                 if self._cancel.is_set():
+                    log.debug("cancel requested — breaking loop")
                     status = "cancelled"
-                    # Best-effort cleanup; ignore failures during teardown.
                     try:
                         await agen.aclose()  # type: ignore[union-attr]
                     except Exception:  # noqa: BLE001
@@ -131,6 +128,7 @@ class _AgentWorker(QObject):
                             text_parts.append(block.text)
                         elif isinstance(block, ToolUseBlock):
                             tool_call_count += 1
+                            log.debug("tool call: %s input=%r", block.name, block.input)
                             self.event.emit(
                                 ToolCallStart(
                                     session_id=self._session_id,
@@ -140,6 +138,7 @@ class _AgentWorker(QObject):
                                 )
                             )
                         elif isinstance(block, ToolResultBlock):
+                            log.debug("tool result: id=%s is_error=%s", block.tool_use_id, block.is_error)
                             self.event.emit(
                                 ToolCallEnd(
                                     session_id=self._session_id,
@@ -149,19 +148,29 @@ class _AgentWorker(QObject):
                                 )
                             )
                 elif isinstance(message, ResultMessage):
+                    log.debug(
+                        "ResultMessage: is_error=%s turns=%s cost=$%.5f",
+                        message.is_error, message.num_turns, message.total_cost_usd or 0,
+                    )
                     usage = message.usage
                     cost_usd = message.total_cost_usd
                     if message.is_error:
                         status = "error"
                         error = message.result or "Agent reported an error"
-                # other message kinds are intentionally ignored at this layer
+                else:
+                    log.debug("ignored sdk message type: %s", type(message).__name__)
         except Exception as exc:  # noqa: BLE001
+            log.exception("exception in _drive session=%s", self._session_id)
             status = "error"
             error = f"{type(exc).__name__}: {exc}"
             self.event.emit(
                 AiError(session_id=self._session_id, message=error)
             )
 
+        log.debug(
+            "_drive done: session=%s status=%s tools=%d text_len=%d",
+            self._session_id, status, tool_call_count, sum(len(t) for t in text_parts),
+        )
         self.finished.emit(
             AiResult(
                 session_id=self._session_id,
@@ -238,19 +247,41 @@ class AgentRunner(QObject):
         """
         if not self._config.enabled:
             raise AiUnavailable("AI features are disabled in config.")
-        status = detect_claude_cli()
-        if not status.available:
-            raise AiUnavailable(status.reason or "Claude Code CLI unavailable.")
+        cli_status = detect_claude_cli()
+        if not cli_status.available:
+            raise AiUnavailable(cli_status.reason or "Claude Code CLI unavailable.")
 
         session_id = uuid.uuid4().hex
+        log.info(
+            "start_session: id=%s tools=%s cwd=%s prompt=%.80r",
+            session_id, allowed_tools, pane_roots.left, prompt,
+        )
+
+        def _sdk_stderr(line: str) -> None:
+            log.debug("[claude-cli stderr] %s", line.rstrip())
+
+        # Force the system CLI so the bundled one (which times out inside
+        # a QThread due to Qt's signal/fd setup) is never selected.
+        import shutil as _shutil
+        system_cli = _shutil.which("claude")
+        log.debug("system claude CLI: %s", system_cli)
+
+        # Use a neutral cwd (/tmp) to avoid slow CLI startup when a pane root
+        # is the home directory — ~3k session files in ~/.claude/ cause a 60s
+        # initialize timeout. Access to pane directories is granted via --add-dir.
+        import tempfile as _tempfile
+        neutral_cwd = _tempfile.gettempdir()
+        log.debug("agent cwd: %s (pane_roots: left=%s right=%s)", neutral_cwd, pane_roots.left, pane_roots.right)
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             allowed_tools=list(allowed_tools),
-            permission_mode="default",
-            can_use_tool=make_can_use_tool(pane_roots),
-            cwd=str(pane_roots.left),
-            add_dirs=[str(pane_roots.right)],
+            permission_mode="dontAsk",
+            cwd=neutral_cwd,
+            add_dirs=[str(pane_roots.left), str(pane_roots.right)],
             model=self._config.model or None,
+            stderr=_sdk_stderr,
+            cli_path=system_cli,
         )
 
         worker = _AgentWorker(
@@ -276,6 +307,7 @@ class AgentRunner(QObject):
         thread.started.connect(worker.run)
 
         def cleanup() -> None:
+            log.debug("cleanup: session=%s", session_id)
             worker.deleteLater()
             bridge.deleteLater()
             thread.deleteLater()
@@ -285,21 +317,26 @@ class AgentRunner(QObject):
             self._bridges.pop(session_id, None)
 
         thread.finished.connect(cleanup)
+        log.debug("starting QThread for session=%s", session_id)
         thread.start()
         return session_id
 
     def cancel(self, session_id: str) -> None:
+        log.info("cancel requested: session=%s", session_id)
         worker = self._workers.get(session_id)
         if worker is not None:
             worker.cancel()
 
     @Slot(object)
     def _on_finished(self, result: object) -> None:
-        # Re-emit on AgentRunner's signal, then quit the thread so cleanup runs.
+        if isinstance(result, AiResult):
+            log.info(
+                "session finished: id=%s status=%s tools=%d cost=$%.5f error=%r",
+                result.session_id, result.status, result.tool_calls,
+                result.cost_usd or 0, result.error,
+            )
         self.session_done.emit(result)
         if isinstance(result, AiResult):
-            # The worker lives on a thread we own; its run() returned, so
-            # quit() is safe and triggers thread.finished -> cleanup().
             for sid, worker in list(self._workers.items()):
                 if sid == result.session_id and worker.thread() is not None:
                     worker.thread().quit()
