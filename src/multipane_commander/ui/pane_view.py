@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from multipane_commander.services.bookmarks import BookmarkStore
+from multipane_commander.domain.entries import EntryInfo
 from multipane_commander.state.model import PaneState, TabState
 from multipane_commander.services.fs.archive_fs import (
     ArchiveFileSystem,
@@ -164,6 +165,9 @@ class PaneView(QFrame):
             "Medium": {"icon": QSize(144, 112), "grid": QSize(170, 164)},
             "Large": {"icon": QSize(216, 168), "grid": QSize(242, 220)},
         }
+        self._sort_column = 0
+        self._sort_order = Qt.SortOrder.AscendingOrder
+        self._current_entries: list[EntryInfo] = []
 
         self.setObjectName("pane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -223,11 +227,16 @@ class PaneView(QFrame):
         self.file_list.setRootIsDecorated(False)
         self.file_list.setUniformRowHeights(True)
         self.file_list.setHeaderLabels(["Name", "Type", "Size", "Modified"])
-        self.file_list.header().setStretchLastSection(False)
-        self.file_list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.file_list.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_list.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_list.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header = self.file_list.header()
+        header.setStretchLastSection(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(self._sort_column, self._sort_order)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.sectionClicked.connect(self._sort_by_header)
         self.file_list.itemActivated.connect(lambda item, _column: self._activate_item(item))
         self.file_list.currentItemChanged.connect(self._update_status)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -501,41 +510,22 @@ class PaneView(QFrame):
         self.marked_paths = preserved_marks
         preserved_current_path = self.preview_path()
         self._rebuild_tab_strip()
-        self.file_list.clear()
-        self.thumbnail_list.clear()
         self._rebuild_breadcrumbs(current_path)
 
-        if current_path.parent != current_path:
-            parent_item = QTreeWidgetItem(["..", "Parent", "", ""])
-            parent_item.setData(0, Qt.ItemDataRole.UserRole, current_path.parent)
-            parent_item.setData(0, Qt.ItemDataRole.UserRole + 1, "parent")
-            parent_item.setData(0, Qt.ItemDataRole.UserRole + 3, "parent")
-            parent_item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogToParent))
-            parent_item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.file_list.addTopLevelItem(parent_item)
-            self.thumbnail_list.addItem(self._build_thumbnail_item(path=current_path.parent, is_dir=True, size=0, modified_text="Parent"))
-
         try:
-            entries = self.fs.list_dir(current_path)
+            self._current_entries = self.fs.list_dir(current_path)
         except OSError as exc:
+            self._current_entries = []
+            self._rebuild_file_views(current_path)
             error_item = QTreeWidgetItem([f"Unable to open directory: {exc}", "Error", "", ""])
             error_item.setFlags(error_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             self.file_list.addTopLevelItem(error_item)
             self.status.setText("directory open failed")
             return
 
-        for entry in entries:
-            self.file_list.addTopLevelItem(self._build_tree_item(entry))
-            self.thumbnail_list.addItem(
-                self._build_thumbnail_item(
-                    path=entry.path,
-                    is_dir=entry.is_dir,
-                    size=entry.size,
-                    modified_text=entry.modified_at.strftime("%Y-%m-%d %H:%M"),
-                )
-            )
+        self._rebuild_file_views(current_path)
 
-        self.summary_chip.setText(f"{len(entries):,} items")
+        self.summary_chip.setText(f"{len(self._current_entries):,} items")
 
         if self.file_list.topLevelItemCount() > 0:
             if preserved_current_path is not None:
@@ -549,6 +539,77 @@ class PaneView(QFrame):
         self._update_bookmark_button()
         self._update_navigation_buttons()
         self.current_directory_changed.emit(current_path)
+
+    def _rebuild_file_views(self, current_path: Path) -> None:
+        self.file_list.clear()
+        self.thumbnail_list.clear()
+
+        if current_path.parent != current_path:
+            parent_item = QTreeWidgetItem(["..", "Parent", "", ""])
+            parent_item.setData(0, Qt.ItemDataRole.UserRole, current_path.parent)
+            parent_item.setData(0, Qt.ItemDataRole.UserRole + 1, "parent")
+            parent_item.setData(0, Qt.ItemDataRole.UserRole + 3, "parent")
+            parent_item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogToParent))
+            parent_item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.file_list.addTopLevelItem(parent_item)
+            self.thumbnail_list.addItem(
+                self._build_thumbnail_item(path=current_path.parent, is_dir=True, size=0, modified_text="Parent")
+            )
+
+        for entry in self._sorted_entries(self._current_entries):
+            self.file_list.addTopLevelItem(self._build_tree_item(entry))
+            self.thumbnail_list.addItem(
+                self._build_thumbnail_item(
+                    path=entry.path,
+                    is_dir=entry.is_dir,
+                    size=entry.size,
+                    modified_text=entry.modified_at.strftime("%Y-%m-%d %H:%M"),
+                )
+            )
+
+    def _sort_by_header(self, column: int) -> None:
+        if column not in {0, 1, 2, 3}:
+            return
+        if self._sort_column == column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+
+        self.file_list.header().setSortIndicator(self._sort_column, self._sort_order)
+        preserved_current_path = self.preview_path()
+        self._rebuild_file_views(self.active_tab.path)
+        if preserved_current_path is not None:
+            self._set_current_path(preserved_current_path)
+        else:
+            self._focus_first_entry()
+        self._update_status()
+        self._refresh_row_styles()
+
+    def _sorted_entries(self, entries: list[EntryInfo]) -> list[EntryInfo]:
+        reverse = self._sort_order == Qt.SortOrder.DescendingOrder
+        directories = [entry for entry in entries if entry.is_dir]
+        files = [entry for entry in entries if not entry.is_dir]
+        return sorted(directories, key=self._entry_sort_key, reverse=reverse) + sorted(
+            files,
+            key=self._entry_sort_key,
+            reverse=reverse,
+        )
+
+    def _entry_sort_key(self, entry: EntryInfo):
+        name_key = entry.name.casefold()
+        if self._sort_column == 1:
+            type_key = "Folder" if entry.is_dir else (entry.extension or "File")
+            return (type_key.casefold(), name_key)
+        if self._sort_column == 2:
+            return (entry.size, name_key)
+        if self._sort_column == 3:
+            return (entry.modified_at, name_key)
+        return (name_key,)
 
     def _build_tree_item(self, entry) -> QTreeWidgetItem:
         item = QTreeWidgetItem(
