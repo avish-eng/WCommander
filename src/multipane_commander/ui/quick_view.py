@@ -380,6 +380,7 @@ class QuickViewWidget(QFrame):
         self._ai_pane_roots: PaneRoots | None = None
         self._ai_current_path: Path | None = None
         self._ai_session_id: str | None = None
+        self._ai_session_path: Path | None = None  # path the active session is for
         self._ai_pre_widget: QWidget | None = None
         self._ai_text_buffer: list[str] = []
         self._apply_size_preset(self.size_picker.currentText())
@@ -797,11 +798,18 @@ class QuickViewWidget(QFrame):
             self._ai_show_error("AI runtime unavailable.")
             return
 
-        # Cancel any in-flight session before starting a fresh one (e.g. when
-        # the user is navigating quickly through files with AI mode on).
+        # If we're already summarizing this exact file, don't restart.
+        # _refresh_ai_state is called twice per _sync_quick_view (once from
+        # set_ai_runtime, once from show_path), so this guard prevents the
+        # duplicate sessions that would otherwise be started and immediately cancelled.
+        if self._ai_session_id is not None and self._ai_session_path == self._ai_current_path:
+            return
+
+        # Cancel any in-flight session for a different file (user navigated away).
         if self._ai_session_id is not None:
             self._cancel_ai_summary()
             self._ai_session_id = None
+            self._ai_session_path = None
 
         # Cache hit: paint instantly, no session.
         cached = load_summary(self._ai_current_path)
@@ -826,6 +834,7 @@ class QuickViewWidget(QFrame):
                 allowed_tools=["Read"],
                 pane_roots=self._ai_pane_roots,
             )
+            self._ai_session_path = self._ai_current_path
         except AiUnavailable as exc:
             self._ai_show_error(str(exc))
 
@@ -851,6 +860,7 @@ class QuickViewWidget(QFrame):
         if result.session_id != self._ai_session_id:
             return
         self._ai_session_id = None
+        self._ai_session_path = None
         self.ai_cancel_button.setVisible(False)
         if result.status == "completed":
             self.ai_status_label.setText("Summary")
