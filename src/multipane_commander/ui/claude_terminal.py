@@ -6,7 +6,17 @@ import platform
 import shutil
 import subprocess
 import threading
+import uuid
 from pathlib import Path
+
+# Namespace UUID for WCommander CC sessions — ensures our deterministic UUIDs
+# never collide with sessions the user started manually from the terminal.
+_WC_SESSION_NS = uuid.UUID("7c9e6679-7425-40de-944b-e07fc1f90ae7")
+
+
+def _session_id_for(path: Path) -> str:
+    """Stable UUID v5 for this directory path, namespaced to WCommander."""
+    return str(uuid.uuid5(_WC_SESSION_NS, str(path.resolve())))
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -165,6 +175,8 @@ class _ClaudeProcess(QObject):
     output_b64 = Signal(str)
     finished = Signal()
 
+    _MAX_BUFFER_CHUNKS = 250  # ~1 MB max per session at 4 KB chunks
+
     def __init__(self) -> None:
         super().__init__()
         self._master_fd: int | None = None
@@ -175,8 +187,9 @@ class _ClaudeProcess(QObject):
         self._rows = 24
         self._pty_cols = 0  # tracks actual PTY size to avoid duplicate SIGWINCH
         self._pty_rows = 0
+        self._output_buffer: list[bytes] = []
 
-    def start(self, cwd: Path, extra_dirs: list[Path]) -> None:
+    def start(self, cwd: Path, extra_dirs: list[Path], session_id: str | None = None) -> None:
         if self.is_running():
             return
 
@@ -194,6 +207,8 @@ class _ClaudeProcess(QObject):
             return
 
         args = [claude]
+        if session_id:
+            args += ["--session-id", session_id]
         for d in extra_dirs:
             args += ["--add-dir", str(d)]
 
@@ -281,8 +296,25 @@ class _ClaudeProcess(QObject):
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
+    def replay(self, write_fn) -> None:
+        """Feed every buffered output chunk into write_fn(b64_str).
+
+        Call AFTER connecting output_b64 so that new chunks from the reader
+        thread arrive via signal (queued, processed after this returns) while
+        the buffer covers everything up to this moment — no gap, no dup.
+        """
+        for chunk in list(self._output_buffer):
+            write_fn(base64.b64encode(chunk).decode("ascii"))
+
     def _emit_msg(self, text: str) -> None:
-        self.output_b64.emit(base64.b64encode(text.encode()).decode("ascii"))
+        data = text.encode()
+        self._append_buffer(data)
+        self.output_b64.emit(base64.b64encode(data).decode("ascii"))
+
+    def _append_buffer(self, chunk: bytes) -> None:
+        if len(self._output_buffer) >= self._MAX_BUFFER_CHUNKS:
+            del self._output_buffer[: len(self._output_buffer) - self._MAX_BUFFER_CHUNKS + 1]
+        self._output_buffer.append(chunk)
 
     def _read_loop(self) -> None:
         while not self._stop.is_set():
@@ -295,6 +327,7 @@ class _ClaudeProcess(QObject):
                 break
             if not chunk:
                 break
+            self._append_buffer(chunk)
             self.output_b64.emit(base64.b64encode(chunk).decode("ascii"))
         self._close_fd()
         self.finished.emit()
@@ -364,15 +397,21 @@ class ClaudeSessionCache(QObject):
         self._sessions[key] = proc
         self._extras[key] = extra_dirs
         proc.finished.connect(lambda k=key: self._sessions.pop(k, None))
-        proc.start(cwd, extra_dirs)
+        proc.start(cwd, extra_dirs, session_id=_session_id_for(key))
         return proc
 
     def force_restart(self, cwd: Path, extra_dirs: list[Path]) -> _ClaudeProcess:
+        """Start a brand-new CC session, ignoring any saved session ID."""
         key = cwd.resolve()
         old = self._sessions.pop(key, None)
         if old is not None:
             old.stop()
-        return self.get_or_create(cwd, extra_dirs)
+        proc = _ClaudeProcess()
+        self._sessions[key] = proc
+        self._extras[key] = extra_dirs
+        proc.finished.connect(lambda k=key: self._sessions.pop(k, None))
+        proc.start(cwd, extra_dirs)  # no session_id → CC picks a fresh UUID
+        return proc
 
     def stop_all(self) -> None:
         for proc in list(self._sessions.values()):
@@ -398,8 +437,8 @@ class ClaudeTerminalWidget(QFrame):
         self._current_cwd: Path | None = None
         self._current_extra: list[Path] = []
         self._current_process: _ClaudeProcess | None = None
+        self._pending_proc: _ClaudeProcess | None = None  # waiting for js_ready after setHtml
         self._js_ready = False
-        self._pending_show: tuple[Path, list[Path]] | None = None
 
         self._cwd_label = QLabel("")
         self._cwd_label.setObjectName("claudeTerminalCwd")
@@ -448,11 +487,32 @@ class ClaudeTerminalWidget(QFrame):
             layout.addWidget(note, 1)
 
     def show_for(self, cwd: Path, extra_dirs: list[Path]) -> None:
-        """Switch to the CC session for `cwd`, starting one if needed."""
-        if self._js_ready:
-            self._switch_to(cwd, extra_dirs)
-        else:
-            self._pending_show = (cwd, extra_dirs)
+        """Switch to the CC session for cwd.
+
+        Always reloads the xterm.js page for a guaranteed clean slate, then
+        replays the session's output buffer so history is always visible.
+        This handles both "new session" and "returning to a previous session"
+        identically — no stale content, no lost history.
+        """
+        self._cwd_label.setText(str(cwd))
+        self._current_cwd = cwd
+        self._current_extra = extra_dirs
+
+        if self._current_process is not None:
+            try:
+                self._current_process.output_b64.disconnect(self._bridge.write_data)
+            except RuntimeError:
+                pass
+            self._current_process = None
+
+        if not _WEB_AVAILABLE:
+            return
+
+        proc = self._cache.get_or_create(cwd, extra_dirs)
+        self._bridge.set_process(proc)  # resize/input wired before page reload
+        self._pending_proc = proc
+        self._js_ready = False
+        self._view.setHtml(_XTERM_HTML)
 
     def stop_session(self) -> None:
         if self._current_process is not None:
@@ -461,53 +521,38 @@ class ClaudeTerminalWidget(QFrame):
             except RuntimeError:
                 pass
             self._current_process = None
+        self._pending_proc = None
+        self._js_ready = False
 
     def _on_js_ready(self) -> None:
         self._js_ready = True
-        if self._pending_show is not None:
-            cwd, extra = self._pending_show
-            self._pending_show = None
-            self._switch_to(cwd, extra)
-
-    def _switch_to(self, cwd: Path, extra_dirs: list[Path]) -> None:
-        # Disconnect previous process output
-        if self._current_process is not None:
-            try:
-                self._current_process.output_b64.disconnect(self._bridge.write_data)
-            except RuntimeError:
-                pass
-
-        proc = self._cache.get_or_create(cwd, extra_dirs)
-        self._current_process = proc
-        self._current_cwd = cwd
-        self._current_extra = extra_dirs
-        self._cwd_label.setText(str(cwd))
-
-        # Clear the terminal display (session output since last visit is gone,
-        # but the CC process and conversation continue), then focus the terminal
-        # so keystrokes (Enter, arrows, slash-command selection) reach xterm.js.
-        if _WEB_AVAILABLE:
-            self._view.page().runJavaScript(
-                "typeof term !== 'undefined' && (term.reset(), term.focus())"
-            )
+        if self._pending_proc is not None:
+            proc, self._pending_proc = self._pending_proc, None
+            self._current_process = proc
+            # Connect live output first, then replay buffer.
+            # Reader-thread signals are queued in Qt's event loop and won't be
+            # delivered until after this method returns, so replay[0..N] arrives
+            # before live[N+1..] — clean ordering, no duplicates.
+            proc.output_b64.connect(self._bridge.write_data)
+            proc.replay(self._bridge.write_data.emit)
             self._view.setFocus()
-
-        proc.output_b64.connect(self._bridge.write_data)
-        self._bridge.set_process(proc)
 
     def _restart(self) -> None:
         if self._current_cwd is None:
             return
-        if _WEB_AVAILABLE:
-            self._view.page().runJavaScript(
-                "typeof term !== 'undefined' && term.reset()"
-            )
-        proc = self._cache.force_restart(self._current_cwd, self._current_extra)
         if self._current_process is not None:
             try:
                 self._current_process.output_b64.disconnect(self._bridge.write_data)
             except RuntimeError:
                 pass
-        self._current_process = proc
-        proc.output_b64.connect(self._bridge.write_data)
+            self._current_process = None
+        cwd = self._current_cwd
+        proc = self._cache.force_restart(cwd, self._current_extra)
         self._bridge.set_process(proc)
+        if _WEB_AVAILABLE:
+            self._pending_proc = proc
+            self._js_ready = False
+            self._view.setHtml(_XTERM_HTML)
+        else:
+            self._current_process = proc
+            proc.output_b64.connect(self._bridge.write_data)

@@ -1130,9 +1130,14 @@ class MainWindow(QMainWindow):
         active = self._active_pane()
         if passive.is_claude_enabled():
             passive.set_claude_enabled(False)
-        else:
-            cwd = active.current_directory()
-            passive.set_claude_enabled(True, cwd, [])
+            return
+        # Close CC in every pane — it may have been left open in a pane that
+        # later became active after the user switched panes without closing.
+        for pv in self.pane_views:
+            if pv.is_claude_enabled():
+                pv.set_claude_enabled(False)
+        cwd = active.current_directory()
+        passive.set_claude_enabled(True, cwd, [])
 
     def _copy_from_active_pane(self) -> None:
         self._run_transfer("copy")

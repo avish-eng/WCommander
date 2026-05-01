@@ -380,8 +380,10 @@ class PaneView(QFrame):
 
     def set_claude_enabled(self, enabled: bool, cwd: Path | None = None, extra: list | None = None) -> None:
         if enabled and cwd is not None and hasattr(self, "claude_view"):
+            # Issue the reset + focus BEFORE making the widget visible so the
+            # terminal is already blank when it appears (no stale-content flash).
+            self.claude_view.show_for(cwd, extra or [])
             self.content_stack.setCurrentWidget(self.claude_view)
-            self.claude_view.show_for(cwd, extra or [])  # focus happens inside show_for
         elif not enabled:
             if hasattr(self, "claude_view"):
                 self.claude_view.stop_session()
