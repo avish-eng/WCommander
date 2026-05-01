@@ -960,4 +960,68 @@ QSplitter::handle {{
 QSplitter::handle:hover {{
     background: {palette.splitter_hover};
 }}
+QFrame#commandBar {{
+    background: {palette.panel_bg};
+    border: 1px solid {palette.panel_border};
+    border-radius: 10px;
+}}
+QWidget#commandBarInputRow {{
+    background: transparent;
+}}
+QLabel#commandBarPrompt {{
+    color: {palette.text_muted};
+    font-family: Consolas, monospace;
+    font-size: {font_size}pt;
+    padding: 0px 2px;
+}}
+QLineEdit#commandBarInput {{
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    color: {palette.text_primary};
+    font-family: Consolas, monospace;
+    font-size: {font_size}pt;
+    padding: 2px 4px;
+    selection-background-color: {palette.selection_bg};
+    selection-color: {palette.selection_text};
+}}
+QLineEdit#commandBarInput:focus {{
+    background: {_rgba(palette.active_pane_border, 0.07)};
+    border-radius: 6px;
+}}
+QFrame#commandBarOutput {{
+    background: {_darken(palette.panel_bg, 0.20)};
+    border: none;
+    border-bottom: 1px solid {palette.panel_border};
+    border-radius: 0px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}}
+QLabel#commandBarOutputCommand {{
+    color: {palette.text_muted};
+    font-family: Consolas, monospace;
+    font-size: {max(8, font_size - 1)}pt;
+}}
+QLabel#commandBarOutputText {{
+    color: {palette.text_primary};
+    font-family: Consolas, monospace;
+    font-size: {font_size}pt;
+}}
+QPushButton#commandBarCloseButton {{
+    background: {palette.secondary_button_bg};
+    border: 1px solid {palette.secondary_button_border};
+    border-radius: 5px;
+    color: {palette.text_primary};
+    font-size: {font_size}pt;
+    font-weight: 600;
+    padding: 0px;
+}}
+QPushButton#commandBarCloseButton:hover {{
+    background: {palette.button_hover_bg};
+    border-color: {palette.button_hover_border};
+    color: {palette.text_primary};
+}}
+QPushButton#commandBarCloseButton:pressed {{
+    background: {palette.button_pressed_bg};
+}}
 """
