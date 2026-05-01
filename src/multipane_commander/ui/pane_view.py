@@ -112,8 +112,11 @@ class _CursorRowDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setPen(QColor(color))
+        font = QFont()
+        font.setPointSize(14)
+        painter.setFont(font)
         r = option.rect
-        badge_rect = QRect(r.right() - 20, r.top(), 18, r.height())
+        badge_rect = QRect(r.right() - 26, r.top(), 24, r.height())
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, char)
         painter.restore()
 

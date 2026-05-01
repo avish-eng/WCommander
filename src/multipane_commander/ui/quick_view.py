@@ -425,6 +425,8 @@ class QuickViewWidget(QFrame):
         self._ai_active_session_id: str | None = None
         self._ai_pre_widget: QWidget | None = None
         self._ai_text_buffer: list[str] = []
+        # session_id → accumulated text chunks (kept for background sessions too)
+        self._ai_session_buffers: dict[str, list[str]] = {}
         self._ai_rendered_view: "QWebEngineView | None" = None
         self._apply_size_preset(self.size_picker.currentText())
 
@@ -828,6 +830,7 @@ class QuickViewWidget(QFrame):
         else:
             self._cancel_all_ai_sessions()
             self._ai_sessions.clear()
+            self._ai_session_buffers.clear()
             self._ai_active_session_id = None
             self.ai_spinner.setVisible(False)
             self._emit_ai_badges_changed()
@@ -849,6 +852,12 @@ class QuickViewWidget(QFrame):
         for sid, path in self._ai_sessions.items():
             if path == self._ai_current_path:
                 self._ai_active_session_id = sid
+                # Restore whatever text has already streamed in for this session.
+                buf = self._ai_session_buffers.setdefault(sid, [])
+                self._ai_text_buffer = buf
+                self.ai_text_view.setPlainText("".join(buf))
+                self.ai_inner_stack.setCurrentIndex(0)
+                self.ai_status_label.setText("Summarizing…")
                 self.ai_spinner.setVisible(True)
                 self.ai_cancel_button.setVisible(True)
                 self.ai_retry_button.setVisible(False)
@@ -875,7 +884,8 @@ class QuickViewWidget(QFrame):
                 self._ai_sessions.pop(oldest, None)
 
         # Start a fresh session. Previous session for a different file keeps running.
-        self._ai_text_buffer.clear()
+        new_buf: list[str] = []
+        self._ai_text_buffer = new_buf
         self.ai_text_view.clear()
         self.ai_inner_stack.setCurrentIndex(0)  # show streaming text view
         self.ai_status_label.setText("Summarizing…")
@@ -891,6 +901,7 @@ class QuickViewWidget(QFrame):
                 pane_roots=self._ai_pane_roots,
             )
             self._ai_sessions[sid] = self._ai_current_path
+            self._ai_session_buffers[sid] = new_buf
             self._ai_active_session_id = sid
             self._emit_ai_badges_changed()
         except AiUnavailable as exc:
@@ -903,6 +914,7 @@ class QuickViewWidget(QFrame):
             for sid in stale:
                 self._ai_runner.cancel(sid)
                 self._ai_sessions.pop(sid, None)
+                self._ai_session_buffers.pop(sid, None)
             if self._ai_active_session_id in stale:
                 self._ai_active_session_id = None
             if stale:
@@ -912,11 +924,17 @@ class QuickViewWidget(QFrame):
     def _on_ai_event(self, event: object) -> None:
         if not isinstance(event, (TextChunk, ToolCallStart, AiError)):
             return
-        if getattr(event, "session_id", None) != self._ai_active_session_id:
+        sid = getattr(event, "session_id", None)
+        if sid is None or sid not in self._ai_sessions:
+            return
+        # Accumulate text for all sessions so reattach can restore it.
+        if isinstance(event, TextChunk):
+            self._ai_session_buffers.setdefault(sid, []).append(event.text)
+        # Only update the visible UI for the session the user is watching.
+        if sid != self._ai_active_session_id:
             return
         if isinstance(event, TextChunk):
-            self._ai_text_buffer.append(event.text)
-            self.ai_text_view.setPlainText("".join(self._ai_text_buffer))
+            self.ai_text_view.setPlainText("".join(self._ai_session_buffers.get(sid, [])))
             cursor = self.ai_text_view.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
             self.ai_text_view.setTextCursor(cursor)
@@ -933,6 +951,7 @@ class QuickViewWidget(QFrame):
             return
 
         file_path = self._ai_sessions.pop(sid)
+        self._ai_session_buffers.pop(sid, None)
         self._emit_ai_badges_changed()
 
         # Always save completed summaries — even for files we've navigated away from.
