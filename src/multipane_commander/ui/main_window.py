@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
             pane_view.current_directory_changed.connect(
                 lambda path, source_pane=pane_view: self._sync_terminal_to_pane_directory(source_pane, path)
             )
+            pane_view.quick_view.ai_badges_changed.connect(self._on_ai_badges_changed)
             pane_view.set_theme_palette(
                 build_palette(
                     resolve_theme_definition(
@@ -1017,6 +1018,9 @@ class MainWindow(QMainWindow):
         if not preview_pane.is_quick_view_enabled():
             self._show_passive_quick_view()
         preview_pane.quick_view.toggle_ai_mode()
+
+    def _on_ai_badges_changed(self, paths: frozenset) -> None:
+        self._active_pane().set_ai_processing_paths(paths)
 
     def _copy_from_active_pane(self) -> None:
         self._run_transfer("copy")

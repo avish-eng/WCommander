@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QUrl
+from PySide6.QtCore import QEvent, Qt, QUrl, Signal
 from PySide6.QtGui import QFont, QKeyEvent, QPixmap, QTextCursor
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -191,6 +192,8 @@ def _format_hex_dump(data: bytes, bytes_per_row: int = 16) -> str:
 
 
 class QuickViewWidget(QFrame):
+    ai_badges_changed = Signal(object)  # frozenset[Path] of currently-processing paths
+
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("quickView")
@@ -355,6 +358,12 @@ class QuickViewWidget(QFrame):
         self.ai_text_view.setObjectName("quickViewAiText")
         self.ai_text_view.setReadOnly(True)
         self.ai_inner_stack.addWidget(self.ai_text_view)   # index 0
+        self.ai_spinner = QProgressBar()
+        self.ai_spinner.setObjectName("quickViewAiSpinner")
+        self.ai_spinner.setRange(0, 0)
+        self.ai_spinner.setTextVisible(False)
+        self.ai_spinner.setMaximumHeight(5)
+        self.ai_spinner.setVisible(False)
         self.ai_cancel_button = QPushButton("Cancel")
         self.ai_cancel_button.setObjectName("quickViewAiCancel")
         self.ai_cancel_button.setVisible(False)
@@ -367,6 +376,7 @@ class QuickViewWidget(QFrame):
         ai_layout.setContentsMargins(0, 0, 0, 0)
         ai_layout.setSpacing(6)
         ai_layout.addWidget(self.ai_status_label)
+        ai_layout.addWidget(self.ai_spinner)
         ai_layout.addWidget(self.ai_inner_stack, 1)
         ai_buttons_row = QHBoxLayout()
         ai_buttons_row.addStretch(1)
@@ -819,6 +829,8 @@ class QuickViewWidget(QFrame):
             self._cancel_all_ai_sessions()
             self._ai_sessions.clear()
             self._ai_active_session_id = None
+            self.ai_spinner.setVisible(False)
+            self._emit_ai_badges_changed()
             if self._ai_pre_widget is not None:
                 self.stack.setCurrentWidget(self._ai_pre_widget)
             self._ai_pre_widget = None
@@ -837,6 +849,9 @@ class QuickViewWidget(QFrame):
         for sid, path in self._ai_sessions.items():
             if path == self._ai_current_path:
                 self._ai_active_session_id = sid
+                self.ai_spinner.setVisible(True)
+                self.ai_cancel_button.setVisible(True)
+                self.ai_retry_button.setVisible(False)
                 return
 
         # Cache hit: render instantly, no new session needed.
@@ -844,6 +859,7 @@ class QuickViewWidget(QFrame):
         if cached is not None:
             self._ai_render_markdown(cached)
             self.ai_status_label.setText("Cached summary (no token cost)")
+            self.ai_spinner.setVisible(False)
             self.ai_cancel_button.setVisible(False)
             self.ai_retry_button.setVisible(True)
             return
@@ -863,6 +879,7 @@ class QuickViewWidget(QFrame):
         self.ai_text_view.clear()
         self.ai_inner_stack.setCurrentIndex(0)  # show streaming text view
         self.ai_status_label.setText("Summarizing…")
+        self.ai_spinner.setVisible(True)
         self.ai_cancel_button.setVisible(True)
         self.ai_retry_button.setVisible(False)
 
@@ -875,6 +892,7 @@ class QuickViewWidget(QFrame):
             )
             self._ai_sessions[sid] = self._ai_current_path
             self._ai_active_session_id = sid
+            self._emit_ai_badges_changed()
         except AiUnavailable as exc:
             self._ai_show_error(str(exc))
 
@@ -887,6 +905,8 @@ class QuickViewWidget(QFrame):
                 self._ai_sessions.pop(sid, None)
             if self._ai_active_session_id in stale:
                 self._ai_active_session_id = None
+            if stale:
+                self._emit_ai_badges_changed()
         self._start_ai_summary()
 
     def _on_ai_event(self, event: object) -> None:
@@ -913,6 +933,7 @@ class QuickViewWidget(QFrame):
             return
 
         file_path = self._ai_sessions.pop(sid)
+        self._emit_ai_badges_changed()
 
         # Always save completed summaries — even for files we've navigated away from.
         if result.status == "completed" and result.text:
@@ -923,6 +944,7 @@ class QuickViewWidget(QFrame):
             return
 
         self._ai_active_session_id = None
+        self.ai_spinner.setVisible(False)
         self.ai_cancel_button.setVisible(False)
         if result.status == "completed":
             self._ai_render_markdown(result.text)
@@ -964,9 +986,13 @@ class QuickViewWidget(QFrame):
 
     def _ai_show_error(self, message: str) -> None:
         self.ai_status_label.setText(f"Error: {message}")
+        self.ai_spinner.setVisible(False)
         self.ai_inner_stack.setCurrentIndex(0)
         self.ai_cancel_button.setVisible(False)
         self.ai_retry_button.setVisible(True)
+
+    def _emit_ai_badges_changed(self) -> None:
+        self.ai_badges_changed.emit(frozenset(self._ai_sessions.values()))
 
     # ----- key handling ---------------------------------------------------
 

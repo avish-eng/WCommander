@@ -39,3 +39,10 @@ def save_summary(path: Path, text: str) -> None:
         (_cache_dir() / f"{k}.txt").write_text(text, encoding="utf-8")
     except OSError:
         pass
+
+
+def has_summary(path: Path) -> bool:
+    k = _key(path)
+    if k is None:
+        return False
+    return (_cache_dir() / f"{k}.txt").exists()
