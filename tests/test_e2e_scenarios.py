@@ -21,15 +21,18 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtCore import QEvent, QEventLoop, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from multipane_commander.bootstrap import AppContext
+from multipane_commander.config.load import load_config
 from multipane_commander.config.model import AppConfig
 from multipane_commander.state.model import AppState, LayoutState, PaneState, TabState, WindowState
+from multipane_commander.ui.command_bar import CommandBar
 from multipane_commander.ui.main_window import MainWindow
+from multipane_commander.ui.terminal_dock import TerminalDock
 
 
 _APP: QApplication | None = None
@@ -106,9 +109,52 @@ def _row_for_path(pane, path: Path):
     raise AssertionError(f"path {path} not found in pane {pane.active_tab.path}")
 
 
+def _has_path(pane, path: Path) -> bool:
+    try:
+        _row_for_path(pane, path)
+    except AssertionError:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
+
+
+def test_e2e_main_window_does_not_show_command_bar(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    try:
+        assert window.command_bar is None
+        assert window.findChildren(CommandBar) == []
+    finally:
+        _close_window(window)
+
+
+def test_e2e_terminal_toggle_persists_visibility(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(TerminalDock, "_ensure_session_started", lambda _self: True)
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+
+    try:
+        assert not window.terminal_dock.isVisible()
+
+        window._toggle_terminal()
+        QApplication.processEvents()
+
+        assert window.terminal_dock.isVisible()
+        assert window.context.config.show_terminal is True
+        assert load_config().show_terminal is True
+
+        window._toggle_terminal()
+        QApplication.processEvents()
+
+        assert not window.terminal_dock.isVisible()
+        assert window.context.config.show_terminal is False
+        assert load_config().show_terminal is False
+    finally:
+        _close_window(window)
 
 
 def test_e2e_arrow_keys_move_cursor_in_active_pane(tmp_path: Path) -> None:
@@ -162,6 +208,42 @@ def test_e2e_pane_click_focuses_file_list_so_arrows_work(tmp_path: Path) -> None
     assert focused is window.pane_views[1].file_list, (
         f"after pane activation, focus should be on file_list; got {focused}"
     )
+    _close_window(window)
+
+
+def test_e2e_window_activation_refreshes_all_panes(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    left_external = left / "external-left.txt"
+    right_external = right / "external-right.txt"
+
+    left_external.write_text("new")
+    right_external.write_text("new")
+    assert not _has_path(window.pane_views[0], left_external)
+    assert not _has_path(window.pane_views[1], right_external)
+
+    QApplication.sendEvent(window, QEvent(QEvent.Type.WindowActivate))
+    QApplication.processEvents()
+
+    _row_for_path(window.pane_views[0], left_external)
+    _row_for_path(window.pane_views[1], right_external)
+    _close_window(window)
+
+
+def test_e2e_switching_panes_refreshes_new_active_pane(tmp_path: Path) -> None:
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    new_right_file = right / "arrived-elsewhere.txt"
+
+    assert window.context.state.layout.active_pane_index == 0
+    new_right_file.write_text("new")
+    assert not _has_path(window.pane_views[1], new_right_file)
+
+    QTest.keyClick(window, Qt.Key.Key_Tab)
+    QApplication.processEvents()
+
+    assert window.context.state.layout.active_pane_index == 1
+    _row_for_path(window.pane_views[1], new_right_file)
     _close_window(window)
 
 
@@ -260,6 +342,26 @@ def test_e2e_alt_f1_opens_drive_menu_for_active_pane(tmp_path: Path, monkeypatch
     _close_window(window)
 
 
+def test_e2e_f1_opens_html_help(tmp_path: Path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+    captured: list[Path] = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: captured.append(Path(url.toLocalFile())) or True,
+    )
+
+    QTest.keyClick(window, Qt.Key.Key_F1)
+
+    assert captured
+    assert captured[0].name == "HELP.html"
+    assert captured[0].is_file()
+    _close_window(window)
+
+
 def test_e2e_f2_renames_file_and_ctrl_z_reverts(tmp_path: Path, monkeypatch) -> None:
     left, right = _setup_split(tmp_path)
     src = left / "old.txt"
@@ -270,8 +372,6 @@ def test_e2e_f2_renames_file_and_ctrl_z_reverts(tmp_path: Path, monkeypatch) -> 
     pane.file_list.setCurrentItem(_row_for_path(pane, src))
 
     # F2 opens TextEntryDialog modal; monkeypatch to auto-accept with new name.
-    from multipane_commander.ui import dialogs as dialogs_mod
-
     class FakeDialog:
         DialogCode = type("DC", (), {"Accepted": 1})
 
@@ -308,8 +408,6 @@ def test_e2e_f5_copies_marked_file_to_passive_pane(tmp_path: Path, monkeypatch) 
     pane.marked_paths = {src}
 
     # The transfer dialog is modal — short-circuit it to "accepted" with no overrides.
-    from multipane_commander.ui import transfer_dialog as td_mod
-
     class FakeTransferDialog:
         DialogCode = type("DC", (), {"Accepted": 1, "Rejected": 0})
 

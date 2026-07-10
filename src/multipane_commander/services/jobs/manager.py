@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from multipane_commander.services.fs.archive_fs import ArchiveFileSystem, inside_archive
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult, FileJobSnapshot
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
 
 
 class _FileJobWorker(QObject):
@@ -308,6 +309,11 @@ class _JobProgressDialog(QDialog):
 
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
         self.background_button.clicked.connect(self.hide)
+        install_dialog_key_bindings(
+            self,
+            accept=self._activate_default_button,
+            reject=self._close_from_keyboard,
+        )
 
     def update_progress(self, current: int, total: int, label: str) -> None:
         self.progress_bar.setMaximum(total)
@@ -327,6 +333,18 @@ class _JobProgressDialog(QDialog):
         self.cancel_button.clicked.connect(self._dismiss)
         if not self.isVisible():
             self.show()
+
+    def _activate_default_button(self) -> None:
+        if self.background_button.isVisible():
+            self.background_button.click()
+            return
+        self.cancel_button.click()
+
+    def _close_from_keyboard(self) -> None:
+        if self.background_button.isVisible():
+            self.background_button.click()
+            return
+        self.cancel_button.click()
 
     def _dismiss(self) -> None:
         self.dismiss_requested.emit()

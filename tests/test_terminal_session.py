@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import sys
 
-from multipane_commander.terminal.backends import QProcessBackend, WinPtyBackend
+from multipane_commander.terminal.backends import QProcessBackend, WinPtyBackend, create_terminal_backend
+from multipane_commander.terminal.backends import _clean_child_path
 from multipane_commander.terminal.session import TerminalSession
 
 
@@ -69,6 +71,45 @@ def test_terminal_session_uses_selected_backend(monkeypatch) -> None:
     }
 
 
+def test_clean_child_path_removes_frozen_bundle_dir(tmp_path: Path) -> None:
+    frozen_dir = tmp_path / "_internal"
+    frozen_qt_dir = frozen_dir / "PySide6"
+    pyside_dir = tmp_path / ".venv" / "Lib" / "site-packages" / "PySide6"
+    shiboken_dir = tmp_path / ".venv" / "Lib" / "site-packages" / "shiboken6"
+    other_dir = tmp_path / "System32"
+    value = os.pathsep.join(
+        [
+            str(frozen_dir),
+            str(frozen_qt_dir),
+            str(pyside_dir),
+            str(shiboken_dir),
+            str(other_dir),
+        ]
+    )
+
+    assert _clean_child_path(value, frozen_dir) == str(other_dir)
+
+
+def test_frozen_windows_package_honors_experimental_pty(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeWinPtyBackend:
+        def __init__(self, *, initial_directory: Path) -> None:
+            self.initial_directory = initial_directory
+
+    monkeypatch.setattr("multipane_commander.terminal.backends.is_windows", lambda: True)
+    monkeypatch.setattr(
+        "multipane_commander.terminal.backends._frozen_bundle_dir",
+        lambda: tmp_path / "_internal",
+    )
+    monkeypatch.setattr("multipane_commander.terminal.backends.WinPtyBackend", FakeWinPtyBackend)
+
+    backend = create_terminal_backend(initial_directory=tmp_path, experimental_pty=True)
+
+    assert isinstance(backend, FakeWinPtyBackend)
+    assert backend.initial_directory == tmp_path
+
+
 def test_terminal_session_hides_directory_sync_command(monkeypatch, tmp_path: Path) -> None:
     backend = FakeBackend()
     monkeypatch.setattr(
@@ -125,7 +166,7 @@ def test_terminal_session_force_kills_current_program(monkeypatch) -> None:
     assert backend.writes == ["force-kill"]
 
 
-def test_winpty_backend_forces_winpty_engine(monkeypatch, tmp_path: Path) -> None:
+def test_winpty_backend_prefers_conpty_engine(monkeypatch, tmp_path: Path) -> None:
     calls: list[dict[str, object]] = []
 
     class FakeProcess:
@@ -148,12 +189,13 @@ def test_winpty_backend_forces_winpty_engine(monkeypatch, tmp_path: Path) -> Non
             calls.append(kwargs)
             return FakeProcess()
 
+    conpty_backend = object()
     winpty_backend = object()
     monkeypatch.setitem(
         sys.modules,
         "winpty",
         SimpleNamespace(
-            Backend=SimpleNamespace(WinPTY=winpty_backend),
+            Backend=SimpleNamespace(ConPTY=conpty_backend, WinPTY=winpty_backend),
             PtyProcess=FakePtyProcess,
         ),
     )
@@ -162,10 +204,14 @@ def test_winpty_backend_forces_winpty_engine(monkeypatch, tmp_path: Path) -> Non
     backend.start()
     backend.stop()
 
-    assert calls == [{"cwd": str(tmp_path), "backend": winpty_backend}]
+    assert len(calls) == 1
+    assert calls[0]["cwd"] == str(tmp_path)
+    assert calls[0]["backend"] is conpty_backend
+    assert isinstance(calls[0]["env"], dict)
+    assert backend.backend_name == "conpty"
 
 
-def test_winpty_backend_falls_back_when_winpty_engine_is_unavailable(
+def test_winpty_backend_falls_back_when_conpty_engine_is_unavailable(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[dict[str, object]] = []
@@ -181,16 +227,17 @@ def test_winpty_backend_falls_back_when_winpty_engine_is_unavailable(
         @staticmethod
         def spawn(_argv, **kwargs):
             calls.append(kwargs)
-            if "backend" in kwargs:
-                raise RuntimeError("backend unavailable")
+            if kwargs.get("backend") is conpty_backend:
+                raise RuntimeError("ConPTY unavailable")
             return FakeProcess()
 
+    conpty_backend = object()
     winpty_backend = object()
     monkeypatch.setitem(
         sys.modules,
         "winpty",
         SimpleNamespace(
-            Backend=SimpleNamespace(WinPTY=winpty_backend),
+            Backend=SimpleNamespace(ConPTY=conpty_backend, WinPTY=winpty_backend),
             PtyProcess=FakePtyProcess,
         ),
     )
@@ -198,10 +245,14 @@ def test_winpty_backend_falls_back_when_winpty_engine_is_unavailable(
     backend = WinPtyBackend(initial_directory=tmp_path)
     backend.start()
 
-    assert calls == [
-        {"cwd": str(tmp_path), "backend": winpty_backend},
-        {"cwd": str(tmp_path)},
-    ]
+    assert len(calls) == 2
+    assert calls[0]["cwd"] == str(tmp_path)
+    assert calls[0]["backend"] is conpty_backend
+    assert isinstance(calls[0]["env"], dict)
+    assert calls[1]["cwd"] == str(tmp_path)
+    assert isinstance(calls[1]["env"], dict)
+    assert calls[1]["backend"] is winpty_backend
+    assert backend.backend_name == "winpty"
 
 
 def test_winpty_backend_uses_sendintr_for_interrupt(monkeypatch, tmp_path: Path) -> None:

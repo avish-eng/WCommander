@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QTime, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtCore import QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -21,53 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from multipane_commander.terminal.session import TerminalSession
-from multipane_commander.ui.terminal_surface import TerminalSurface
-
-
-def _history_action_icon(kind: str) -> QIcon:
-    pixmap = QPixmap(16, 16)
-    pixmap.fill(Qt.GlobalColor.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    color = QColor("#D7E7FF")
-    accent = QColor("#4FD1FF")
-    warning = QColor("#F27EA6")
-    pen = QPen(color, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-
-    if kind == "pin":
-        painter.setPen(QPen(accent, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawLine(QPointF(6.0, 3.0), QPointF(11.0, 8.0))
-        painter.drawLine(QPointF(4.5, 7.0), QPointF(9.0, 2.5))
-        painter.drawLine(QPointF(7.0, 9.0), QPointF(3.2, 12.8))
-        painter.drawLine(QPointF(9.0, 8.0), QPointF(12.5, 11.5))
-    elif kind == "use":
-        painter.setPen(QPen(accent, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawLine(QPointF(3.0, 5.0), QPointF(9.5, 5.0))
-        painter.drawLine(QPointF(3.0, 8.0), QPointF(7.0, 8.0))
-        painter.drawLine(QPointF(3.0, 11.0), QPointF(6.0, 11.0))
-        painter.drawLine(QPointF(10.0, 7.0), QPointF(13.0, 10.0))
-        painter.drawLine(QPointF(13.0, 10.0), QPointF(10.0, 13.0))
-        painter.drawLine(QPointF(13.0, 10.0), QPointF(7.5, 10.0))
-    elif kind == "run":
-        painter.setPen(QPen(accent, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.setBrush(accent)
-        painter.drawPolygon(
-            QPolygonF([QPointF(5.0, 3.5), QPointF(12.0, 8.0), QPointF(5.0, 12.5)])
-        )
-    elif kind == "unpin":
-        painter.setPen(QPen(color, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawLine(QPointF(6.0, 3.0), QPointF(11.0, 8.0))
-        painter.drawLine(QPointF(4.5, 7.0), QPointF(9.0, 2.5))
-        painter.drawLine(QPointF(7.0, 9.0), QPointF(3.2, 12.8))
-        painter.drawLine(QPointF(9.0, 8.0), QPointF(12.5, 11.5))
-        painter.setPen(QPen(warning, 1.9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(QPointF(3.2, 3.2), QPointF(12.8, 12.8))
-
-    painter.end()
-    return QIcon(pixmap)
+from multipane_commander.ui.xterm_surface import WEB_TERMINAL_AVAILABLE, create_terminal_surface
 
 
 class TerminalDock(QFrame):
@@ -96,7 +51,10 @@ class TerminalDock(QFrame):
         self._is_maximized = False
         self._side_by_side_mode = False
         self._follow_active_pane = follow_active_pane
-        self._experimental_pty = experimental_pty
+        self._current_directory = initial_directory
+        # A real PTY is the natural backend for xterm. Keep the old setting as
+        # an escape hatch, but prefer PTY automatically for the new surface.
+        self._experimental_pty = experimental_pty or WEB_TERMINAL_AVAILABLE
         self._recent_commands = self._unique_commands(recent_commands or [])
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])
         self._output_press_pos: QPoint | None = None
@@ -106,10 +64,10 @@ class TerminalDock(QFrame):
         self._pty_ready_timer.setInterval(150)
         self._pty_ready_timer.timeout.connect(self._release_pty_input)
         self.session = self._build_session(initial_directory)
-        self.output = TerminalSurface()
+        self.output = create_terminal_surface()
         self.output.command_submitted.connect(self._remember_command)
         self.output.terminal_resized.connect(self._resize_active_session)
-        self.cwd_label = QLabel(str(initial_directory))
+        self.runtime_label = QLabel(self._runtime_description())
         self.follow_button = QPushButton()
         self.pty_button = QPushButton()
         self.maximize_button = QPushButton("Full Screen")
@@ -131,10 +89,10 @@ class TerminalDock(QFrame):
         header_top.setSpacing(8)
         title = QLabel("Terminal")
         title.setObjectName("terminalTitle")
-        self.cwd_label.setObjectName("terminalPath")
-        self.cwd_label.setWordWrap(False)
-        self.cwd_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.cwd_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.runtime_label.setObjectName("terminalPath")
+        self.runtime_label.setWordWrap(False)
+        self.runtime_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runtime_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.follow_button.setObjectName("secondaryActionButton")
         self.follow_button.setCheckable(True)
         self.follow_button.clicked.connect(self._toggle_follow_active_pane)
@@ -162,7 +120,7 @@ class TerminalDock(QFrame):
         restart_button.clicked.connect(self.restart_shell)
 
         header_top.addWidget(title)
-        header_top.addWidget(self.cwd_label, 1)
+        header_top.addWidget(self.runtime_label, 1)
         header_top.addWidget(self.history_button)
         header_top.addWidget(self.clear_button)
         header_top.addWidget(self.rerun_button)
@@ -193,12 +151,20 @@ class TerminalDock(QFrame):
         self.bookmarks_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.bookmarks_list.setSpacing(1)
         self.bookmarks_list.setUniformItemSizes(True)
+        self.bookmarks_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.bookmarks_list.customContextMenuRequested.connect(
+            lambda position: self._show_command_context_menu(self.bookmarks_list, position)
+        )
         self.bookmarks_list.installEventFilter(self)
         self.recent_list = QListWidget()
         self.recent_list.setObjectName("terminalCommandList")
         self.recent_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.recent_list.setSpacing(1)
         self.recent_list.setUniformItemSizes(True)
+        self.recent_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.recent_list.customContextMenuRequested.connect(
+            lambda position: self._show_command_context_menu(self.recent_list, position)
+        )
         self.recent_list.installEventFilter(self)
         self.bookmarks_list.itemDoubleClicked.connect(self._run_clicked_command)
         self.recent_list.itemDoubleClicked.connect(self._run_clicked_command)
@@ -220,24 +186,7 @@ class TerminalDock(QFrame):
         recent_title = QLabel("Recent")
         recent_title.setObjectName("terminalHistorySection")
 
-        history_actions = QHBoxLayout()
-        history_actions.setContentsMargins(0, 0, 0, 0)
-        history_actions.setSpacing(4)
-        pin_button = self._history_action_button("Pin command", "pin")
-        pin_button.clicked.connect(self._pin_current_command)
-        use_button = self._history_action_button("Use command", "use")
-        use_button.clicked.connect(self._use_selected_command)
-        run_button = self._history_action_button("Run command", "run")
-        run_button.clicked.connect(self._run_selected_command)
-        remove_button = self._history_action_button("Unpin command", "unpin")
-        remove_button.clicked.connect(self._remove_selected_bookmark)
-        history_actions.addWidget(pin_button)
-        history_actions.addWidget(use_button)
-        history_actions.addWidget(run_button)
-        history_actions.addWidget(remove_button)
-
         history_layout.addWidget(self.command_filter)
-        history_layout.addLayout(history_actions)
         history_layout.addWidget(bookmarks_title)
         history_layout.addWidget(self.bookmarks_list, 1)
         history_layout.addWidget(recent_title)
@@ -257,11 +206,12 @@ class TerminalDock(QFrame):
 
         self._bind_session()
         self.set_follow_active_pane(follow_active_pane)
-        self.set_experimental_pty(experimental_pty, emit=False)
+        self.set_experimental_pty(self._experimental_pty, emit=False)
         self.set_history_panel_visible(history_panel_visible, emit=False)
         self._refresh_command_lists()
         self._update_rerun_button()
-        self.session.start()
+        if visible:
+            self._ensure_session_started()
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
         command_filter = getattr(self, "command_filter", None)
@@ -311,13 +261,17 @@ class TerminalDock(QFrame):
     def toggle_visible(self) -> None:
         self.setVisible(not self.isVisible())
         if self.isVisible():
+            self._ensure_session_started()
             self.focus_input()
 
     def inject_command(self, cwd: str, command: str) -> None:
         """Navigate PTY to cwd and run command. Starts session if not running."""
         path = Path(cwd)
-        if not self.session.backend.is_running():
-            self.session.start()
+        self._current_directory = path
+        if not self._ensure_session_started():
+            self.setVisible(True)
+            self.focus_input()
+            return
         self.session.change_directory(path)
         self._run_command(command)
         if not self.isVisible():
@@ -346,9 +300,9 @@ class TerminalDock(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, vertical_policy)
 
     def sync_to_path(self, path: Path, *, enabled: bool) -> None:
-        self.cwd_label.setText(str(path))
         self.set_follow_active_pane(enabled)
         if enabled:
+            self._current_directory = path
             self.session.change_directory(path)
 
     def set_follow_active_pane(self, enabled: bool) -> None:
@@ -409,6 +363,10 @@ class TerminalDock(QFrame):
 
     def paste_to_input(self) -> None:
         self.focus_input()
+        paste_from_clipboard = getattr(self.output, "paste_from_clipboard", None)
+        if callable(paste_from_clipboard):
+            paste_from_clipboard()
+            return
         text = QApplication.clipboard().text()
         if text:
             self.output.inject_command(text, run=False)
@@ -421,8 +379,27 @@ class TerminalDock(QFrame):
             self._pty_ready_timer.start()
 
     def _handle_started(self) -> None:
-        if self.session.backend_name == "qprocess":
-            self._append_output("Shell started.\n")
+        self.runtime_label.setText(self._runtime_description())
+
+    def _runtime_description(self) -> str:
+        frontend = (
+            "xterm.js"
+            if bool(getattr(self.output, "accepts_immediate_input", False))
+            else "Qt text fallback"
+        )
+        shell = {
+            "pwsh": "PowerShell 7",
+            "powershell": "Windows PowerShell",
+            "cmd": "Command Prompt",
+            "posix": "POSIX shell",
+        }.get(self.session.shell_kind, self.session.shell_kind)
+        backend = {
+            "conpty": "ConPTY",
+            "winpty": "WinPTY",
+            "qprocess": "QProcess",
+            "posix-pty": "POSIX PTY",
+        }.get(self.session.backend_name, self.session.backend_name)
+        return f"{frontend} · {shell} · {backend}"
 
     def _toggle_follow_active_pane(self, enabled: bool) -> None:
         self.set_follow_active_pane(enabled)
@@ -434,14 +411,13 @@ class TerminalDock(QFrame):
     def _toggle_experimental_pty(self, enabled: bool) -> None:
         if enabled == self._experimental_pty:
             return
-        current_directory = Path(self.cwd_label.text())
         self.session.stop()
         self.output.clear()
         self._experimental_pty = enabled
-        self.session = self._build_session(current_directory)
+        self.session = self._build_session(self._current_directory)
         self._bind_session()
         self.set_experimental_pty(enabled)
-        self.session.start()
+        self._ensure_session_started()
 
     def _rerun_last_command(self) -> None:
         if not self._recent_commands:
@@ -461,6 +437,11 @@ class TerminalDock(QFrame):
         self.action_status_label.setText(f"{action} at {timestamp} ({self.session.backend_name})")
         self.action_status_label.setVisible(True)
         self.action_status_timer_start()
+
+    def _ensure_session_started(self) -> bool:
+        if not self.session.backend.is_running():
+            self.session.start()
+        return True
 
     def action_status_timer_start(self) -> None:
         self._action_status_timer.start()
@@ -516,6 +497,35 @@ class TerminalDock(QFrame):
     def _run_clicked_command(self, item: QListWidgetItem) -> None:
         self._run_command(item.text())
 
+    def _show_command_context_menu(self, widget: QListWidget, position: QPoint) -> None:
+        item = widget.itemAt(position)
+        if item is None:
+            return
+
+        widget.setCurrentItem(item)
+        widget.setFocus(Qt.FocusReason.MouseFocusReason)
+        command = item.text()
+        menu = self._build_command_context_menu(widget, command)
+        menu.exec(widget.viewport().mapToGlobal(position))
+
+    def _build_command_context_menu(self, widget: QListWidget, command: str) -> QMenu:
+        menu = QMenu(self)
+        use_action = menu.addAction("Use command")
+        use_action.triggered.connect(lambda _checked=False, value=command: self._use_command(value))
+        run_action = menu.addAction("Run command")
+        run_action.triggered.connect(lambda _checked=False, value=command: self._run_command(value))
+        menu.addSeparator()
+
+        if widget is self.bookmarks_list:
+            unpin_action = menu.addAction("Unpin command")
+            unpin_action.triggered.connect(lambda _checked=False, value=command: self._remove_bookmark(value))
+        else:
+            pin_action = menu.addAction("Pin command")
+            pin_action.setEnabled(command not in self._bookmarked_commands)
+            pin_action.triggered.connect(lambda _checked=False, value=command: self._pin_command(value))
+
+        return menu
+
     def _use_selected_command(self) -> None:
         command = self._selected_command()
         if command is None:
@@ -539,6 +549,9 @@ class TerminalDock(QFrame):
         command = self._selected_command()
         if command is None:
             return
+        self._pin_command(command)
+
+    def _pin_command(self, command: str) -> None:
         if command in self._bookmarked_commands:
             return
         self._bookmarked_commands.append(command)
@@ -549,7 +562,9 @@ class TerminalDock(QFrame):
         current_item = self.bookmarks_list.currentItem()
         if current_item is None:
             return
-        command = current_item.text()
+        self._remove_bookmark(current_item.text())
+
+    def _remove_bookmark(self, command: str) -> None:
         if command not in self._bookmarked_commands:
             return
         self._bookmarked_commands.remove(command)
@@ -581,15 +596,6 @@ class TerminalDock(QFrame):
     def _command_key(self, command: str) -> str:
         return command.strip()
 
-    def _history_action_button(self, tooltip: str, icon_kind: str) -> QPushButton:
-        button = QPushButton()
-        button.setObjectName("terminalHistoryActionButton")
-        button.setIcon(_history_action_icon(icon_kind))
-        button.setIconSize(QSize(14, 14))
-        button.setToolTip(tooltip)
-        button.setAccessibleName(tooltip)
-        return button
-
     def _clear_other_command_selection(self, other_list: QListWidget, current_item) -> None:
         if current_item is None:
             return
@@ -604,7 +610,8 @@ class TerminalDock(QFrame):
         self.output.set_submit_sequence(self.session.submit_bytes())
         local_echo = self.session.backend_name == "qprocess"
         self.output.set_local_echo(local_echo)
-        self.output.set_input_ready(local_echo)
+        immediate_input = bool(getattr(self.output, "accepts_immediate_input", False))
+        self.output.set_input_ready(local_echo or immediate_input)
         self._pty_ready_timer.stop()
         self._refresh_backend_ui()
         self.session.output_received.connect(self._append_output)

@@ -658,7 +658,7 @@ def test_F0_4_launch_editor_falls_back_to_desktop_when_nothing_set(tmp_path: Pat
     strategy = launch_editor(target)
 
     assert strategy == "desktop"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_falls_back_to_code_on_path(tmp_path: Path, monkeypatch) -> None:
@@ -763,7 +763,7 @@ def test_F0_4_launch_editor_skips_editor_for_image(tmp_path: Path, monkeypatch) 
 
     assert strategy == "desktop-binary"
     assert spawned == []
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_pdf(tmp_path: Path, monkeypatch) -> None:
@@ -789,7 +789,7 @@ def test_F0_4_launch_editor_skips_editor_for_pdf(tmp_path: Path, monkeypatch) ->
 
     assert strategy == "desktop-binary"
     assert spawned == []
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_tiff(tmp_path: Path, monkeypatch) -> None:
@@ -806,7 +806,7 @@ def test_F0_4_launch_editor_skips_editor_for_tiff(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
 
     assert launch_editor(target) == "desktop-binary"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_ico(tmp_path: Path, monkeypatch) -> None:
@@ -821,7 +821,7 @@ def test_F0_4_launch_editor_skips_editor_for_ico(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
 
     assert launch_editor(target) == "desktop-binary"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_video(tmp_path: Path, monkeypatch) -> None:
@@ -836,7 +836,7 @@ def test_F0_4_launch_editor_skips_editor_for_video(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
 
     assert launch_editor(target) == "desktop-binary"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_audio(tmp_path: Path, monkeypatch) -> None:
@@ -851,7 +851,7 @@ def test_F0_4_launch_editor_skips_editor_for_audio(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
 
     assert launch_editor(target) == "desktop-binary"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_office_doc(tmp_path: Path, monkeypatch) -> None:
@@ -866,7 +866,7 @@ def test_F0_4_launch_editor_skips_editor_for_office_doc(tmp_path: Path, monkeypa
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: captured.append(url.toLocalFile()) or True)
 
     assert launch_editor(target) == "desktop-binary"
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_skips_editor_for_archive(tmp_path: Path, monkeypatch) -> None:
@@ -892,7 +892,7 @@ def test_F0_4_launch_editor_skips_editor_for_archive(tmp_path: Path, monkeypatch
 
     assert strategy == "desktop-binary"
     assert spawned == []
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_uses_editor_for_markdown(tmp_path: Path, monkeypatch) -> None:
@@ -987,7 +987,7 @@ def test_F0_4_launch_editor_classifies_unknown_ext_with_null_bytes_as_binary(
 
     assert strategy == "desktop-binary"
     assert spawned == []
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_4_launch_editor_classifies_unknown_ext_text_body_as_text(
@@ -1041,7 +1041,7 @@ def test_F0_3_open_external_viewer_calls_desktop_services(tmp_path: Path, monkey
 
     _StubMainWindow()._open_external_viewer()
 
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_3_open_external_viewer_no_path_is_noop(monkeypatch) -> None:
@@ -1094,7 +1094,7 @@ def test_F0_4_open_with_default_app_skips_editor_chain(tmp_path: Path, monkeypat
     _StubMainWindow()._open_with_default_app()
 
     assert spawned == []
-    assert captured == [str(target)]
+    assert [Path(path) for path in captured] == [target]
 
 
 def test_F0_3_shift_f3_fires_with_terminal_focused() -> None:
@@ -1184,7 +1184,7 @@ def test_F0_2_enter_on_file_launches_via_desktop_services(tmp_path: Path, monkey
 
     pane._activate_item(pane.file_list.currentItem())
 
-    assert captured == [str(file_a)]
+    assert [Path(path) for path in captured] == [file_a]
 
 
 def test_F0_2_enter_on_directory_does_not_launch(tmp_path: Path, monkeypatch) -> None:

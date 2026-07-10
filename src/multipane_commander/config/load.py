@@ -7,6 +7,7 @@ from pathlib import Path
 from multipane_commander.config.model import (
     AiConfig,
     AppConfig,
+    EnvPathConfig,
     TerminalConfig,
     ThemeConfig,
     ThemeDefinition,
@@ -82,6 +83,16 @@ def load_config() -> AppConfig:
     ai_model_raw = ai_payload.get("model", "")
     ai_model = ai_model_raw if isinstance(ai_model_raw, str) else ""
 
+    env_path_payload = payload.get("env_path", {})
+    if not isinstance(env_path_payload, dict):
+        env_path_payload = {}
+    env_path_entries = _string_list(env_path_payload.get("entries", []))
+    env_path_sources = _path_sources(env_path_payload.get("sources", []), len(env_path_entries))
+    env_path_original_entries = _path_original_entries(
+        env_path_payload.get("original_entries", []),
+        len(env_path_entries),
+    )
+
     return AppConfig(
         theme=ThemeConfig(
             selected_theme_id=legacy_theme_name,
@@ -96,6 +107,11 @@ def load_config() -> AppConfig:
         ai=AiConfig(
             enabled=_safe_bool(ai_payload.get("enabled"), True),
             model=ai_model,
+        ),
+        env_path=EnvPathConfig(
+            entries=env_path_entries,
+            sources=env_path_sources,
+            original_entries=env_path_original_entries,
         ),
         follow_active_pane_terminal=_safe_bool(
             payload.get("follow_active_pane_terminal"),
@@ -125,6 +141,29 @@ def _string_list(value: object) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _path_sources(value: object, expected_length: int) -> list[str]:
+    if not isinstance(value, list):
+        return ["session"] * expected_length
+    sources: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() in {"machine", "user", "session"}:
+            sources.append(item.strip())
+        else:
+            sources.append("session")
+    if len(sources) != expected_length:
+        return ["session"] * expected_length
+    return sources
+
+
+def _path_original_entries(value: object, expected_length: int) -> list[str]:
+    if not isinstance(value, list):
+        return [""] * expected_length
+    entries = [item.strip() if isinstance(item, str) else "" for item in value]
+    if len(entries) != expected_length:
+        return [""] * expected_length
+    return entries
+
+
 def save_config(config: AppConfig) -> None:
     config_path = _config_file_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +181,11 @@ def save_config(config: AppConfig) -> None:
         "ai": {
             "enabled": config.ai.enabled,
             "model": config.ai.model,
+        },
+        "env_path": {
+            "entries": config.env_path.entries,
+            "sources": config.env_path.sources,
+            "original_entries": config.env_path.original_entries,
         },
         "follow_active_pane_terminal": config.follow_active_pane_terminal,
         "show_terminal": config.show_terminal,

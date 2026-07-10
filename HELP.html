@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Multi-Pane Commander Help</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1724;
+      --panel: #151f2e;
+      --text: #e9eef8;
+      --muted: #9badc7;
+      --line: #2b3b54;
+      --key: #203047;
+      --accent: #6cc7ff;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+    }
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0 0 18px;
+      color: var(--muted);
+    }
+    section {
+      margin-top: 20px;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    td {
+      padding: 8px 10px;
+      border-top: 1px solid var(--line);
+      vertical-align: top;
+    }
+    tr:first-child td {
+      border-top: 0;
+    }
+    kbd {
+      display: inline-block;
+      min-width: 76px;
+      padding: 2px 7px;
+      border: 1px solid #43546f;
+      background: var(--key);
+      border-radius: 4px;
+      color: #f7fbff;
+      font: 13px/1.4 Consolas, "Courier New", monospace;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .pair kbd {
+      min-width: 112px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Multi-Pane Commander</h1>
+    <p>Command list. The active pane is the pane with focus.</p>
+
+    <section>
+      <h2>Function Keys</h2>
+      <table>
+        <tr><td><kbd>F1</kbd></td><td>Open this help</td></tr>
+        <tr><td><kbd>F2</kbd></td><td>Rename selected item</td></tr>
+        <tr><td><kbd>F3</kbd></td><td>Quick View in the passive pane</td></tr>
+        <tr><td><kbd>F4</kbd></td><td>Edit selected file</td></tr>
+        <tr><td><kbd>F5</kbd></td><td>Copy to passive pane</td></tr>
+        <tr><td><kbd>F6</kbd></td><td>Move to passive pane</td></tr>
+        <tr><td><kbd>F7</kbd></td><td>Create directory</td></tr>
+        <tr><td><kbd>F8</kbd></td><td>Delete selected items</td></tr>
+        <tr><td><kbd>F9</kbd></td><td>Show or hide terminal</td></tr>
+        <tr><td><kbd>F10</kbd></td><td>Open main menu</td></tr>
+        <tr><td><kbd>F11</kbd></td><td>Layout menu</td></tr>
+        <tr><td><kbd>F12</kbd></td><td>Jobs view</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Navigation</h2>
+      <table>
+        <tr><td><kbd>Tab</kbd></td><td>Switch active pane</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Open file or enter directory/archive</td></tr>
+        <tr><td><kbd>Backspace</kbd></td><td>Go to parent directory</td></tr>
+        <tr><td><kbd>Insert</kbd></td><td>Mark or unmark item</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Mark item; on a directory, compute size</td></tr>
+        <tr class="pair"><td><kbd>Alt+Arrow</kbd></td><td>Move focus by pane direction</td></tr>
+        <tr class="pair"><td><kbd>Alt+F1/F2</kbd></td><td>Drive menu for active/passive pane</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tools</h2>
+      <table>
+        <tr><td><kbd>Ctrl+S</kbd></td><td>Quick filter current pane</td></tr>
+        <tr><td><kbd>Ctrl+M</kbd></td><td>Multi-rename</td></tr>
+        <tr><td><kbd>Ctrl+Z</kbd></td><td>Undo last rename</td></tr>
+        <tr><td><kbd>Alt+F7</kbd></td><td>Find files</td></tr>
+        <tr><td><kbd>Ctrl+R</kbd></td><td>Refresh active pane</td></tr>
+        <tr><td><kbd>Ctrl+P</kbd></td><td>Edit process PATH</td></tr>
+        <tr><td><kbd>Ctrl+K</kbd></td><td>Open AI command palette</td></tr>
+        <tr><td><kbd>Ctrl+G</kbd></td><td>Focus command bar</td></tr>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

@@ -18,6 +18,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multipane_commander.platform import windows_cmd_program
+from multipane_commander.terminal.backends import (
+    clean_child_process_environment,
+    clean_windows_dll_directory_for_child_process,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -194,10 +200,13 @@ class CommandBar(QFrame):
         self._pending_command = command
         self._process = QProcess(self)
         self._process.setWorkingDirectory(str(self._cwd))
+        self._process.setProcessEnvironment(clean_child_process_environment())
         self._process.finished.connect(self._on_process_finished)
 
         if sys.platform == "win32":
-            self._process.start("cmd.exe", ["/c", command])
+            with clean_windows_dll_directory_for_child_process():
+                self._process.start(windows_cmd_program(), ["/c", command])
+                self._process.waitForStarted(3000)
         else:
             self._process.start("/bin/sh", ["-c", command])
 

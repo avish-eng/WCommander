@@ -43,9 +43,17 @@ class AiConfig:
 
 
 @dataclass(slots=True)
+class EnvPathConfig:
+    entries: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    original_entries: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class AppConfig:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     ai: AiConfig = field(default_factory=AiConfig)
+    env_path: EnvPathConfig = field(default_factory=EnvPathConfig)
     follow_active_pane_terminal: bool = True
     show_terminal: bool = True

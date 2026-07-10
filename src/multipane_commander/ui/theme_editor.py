@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from multipane_commander.config.model import ThemeDefinition
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
 from multipane_commander.ui.themes import slugify_theme_name
 
 
@@ -204,6 +205,7 @@ class ThemeEditorDialog(QDialog):
         self.name_input.setFocus()
         self._wire_live_preview()
         self._refresh_preview_sample()
+        install_dialog_key_bindings(self, accept=save_button.click)
 
     def _add_color_field(self, form: QFormLayout, *, label: str, key: str, value: str) -> None:
         row = QWidget()

@@ -37,6 +37,18 @@ def test_pick_shell_prefers_posix_shell_when_pwsh_missing(monkeypatch) -> None:
     assert shell.kind == "posix"
 
 
+def test_pick_shell_uses_windows_comspec(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+
+    shell = pick_shell()
+
+    assert shell.program == r"C:\Windows\System32\cmd.exe"
+    assert shell.args == []
+    assert shell.kind == "cmd"
+
+
 def test_build_cd_command_supports_posix_paths() -> None:
     command = build_cd_command(Path("/tmp/it's-here"), "posix")
     assert command.startswith("cd -- '")

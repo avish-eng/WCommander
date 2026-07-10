@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
+
 
 class TransferDialog(QDialog):
     def __init__(
@@ -127,6 +129,7 @@ class TransferDialog(QDialog):
 
         self.destination_edit.setFocus()
         self.destination_edit.selectAll()
+        install_dialog_key_bindings(self, accept=accept_button.click)
 
     def destination_directory(self) -> Path:
         return Path(self.destination_edit.text()).expanduser()

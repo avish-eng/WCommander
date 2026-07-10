@@ -1,13 +1,89 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
+import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
 from multipane_commander.platform import build_cd_command, is_windows, pick_shell, shell_line_ending
+
+
+def _frozen_bundle_dir() -> Path | None:
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if not bundle_dir:
+        return None
+    return Path(bundle_dir)
+
+
+def _clean_child_path(path_value: str, frozen_dir: Path | None = None) -> str:
+    frozen = _path_key(frozen_dir) if frozen_dir else None
+    parts = []
+    for part in path_value.split(os.pathsep):
+        if not part:
+            continue
+        path = Path(part)
+        try:
+            normalized = _path_key(path)
+        except OSError:
+            normalized = os.path.normcase(os.path.normpath(part))
+        if _should_remove_child_path(path, normalized, frozen):
+            continue
+        parts.append(part)
+    return os.pathsep.join(parts)
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(os.path.normpath(str(path.resolve(strict=False))))
+
+
+def _should_remove_child_path(path: Path, normalized: str, frozen_dir_key: str | None) -> bool:
+    if frozen_dir_key and (normalized == frozen_dir_key or normalized.startswith(frozen_dir_key + os.sep)):
+        return True
+
+    parts = {part.casefold() for part in path.parts}
+    name = path.name.casefold()
+    return name in {"pyside6", "shiboken6"} and "site-packages" in parts
+
+
+def clean_child_process_environment() -> QProcessEnvironment:
+    environment = QProcessEnvironment()
+    for key, value in clean_child_process_environment_map().items():
+        environment.insert(key, value)
+    return environment
+
+
+def clean_child_process_environment_map() -> dict[str, str]:
+    environment = dict(os.environ)
+    frozen_dir = _frozen_bundle_dir()
+    for key in ("PATH", "Path"):
+        value = environment.get(key)
+        if value:
+            environment[key] = _clean_child_path(value, frozen_dir)
+    return environment
+
+
+@contextmanager
+def clean_windows_dll_directory_for_child_process():
+    frozen_dir = _frozen_bundle_dir()
+    if os.name != "nt" or frozen_dir is None:
+        yield
+        return
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_dll_directory = kernel32.SetDllDirectoryW
+    set_dll_directory.argtypes = [ctypes.c_wchar_p]
+    set_dll_directory.restype = ctypes.c_bool
+
+    set_dll_directory(None)
+    try:
+        yield
+    finally:
+        set_dll_directory(str(frozen_dir))
 
 
 class TerminalBackend(QObject):
@@ -76,7 +152,10 @@ class QProcessBackend(TerminalBackend):
         if self.process.state() != QProcess.ProcessState.NotRunning:
             return
         self.process.setWorkingDirectory(str(self.initial_directory))
-        self.process.start(self.shell.program, self.shell.args)
+        self.process.setProcessEnvironment(clean_child_process_environment())
+        with clean_windows_dll_directory_for_child_process():
+            self.process.start(self.shell.program, self.shell.args)
+            self.process.waitForStarted(3000)
 
     def stop(self) -> None:
         if self.process.state() == QProcess.ProcessState.NotRunning:
@@ -232,29 +311,50 @@ class WinPtyBackend(TerminalBackend):
         from winpty import Backend, PtyProcess
 
         self._pty_process_class = PtyProcess
-        self._pty_backend = getattr(Backend, "WinPTY", None)
+        candidates = [
+            ("conpty", getattr(Backend, "ConPTY", None)),
+            ("winpty", getattr(Backend, "WinPTY", None)),
+        ]
+        self._pty_backend_candidates = [
+            (name, backend) for name, backend in candidates if backend is not None
+        ]
+        self._active_backend_name = (
+            self._pty_backend_candidates[0][0] if self._pty_backend_candidates else "pty"
+        )
         self._process = None
         self._reader_thread: threading.Thread | None = None
         self._stop_reader = threading.Event()
 
     @property
     def backend_name(self) -> str:
-        return "winpty"
+        return self._active_backend_name
 
     def start(self) -> None:
         if self.is_running():
             return
 
         argv = [self.shell.program, *self.shell.args]
-        spawn_options = {"cwd": str(self.initial_directory)}
-        if self._pty_backend is not None:
-            spawn_options["backend"] = self._pty_backend
-        try:
-            self._process = self._pty_process_class.spawn(argv, **spawn_options)
-        except Exception:
-            if self._pty_backend is None:
-                raise
-            self._process = self._pty_process_class.spawn(argv, cwd=str(self.initial_directory))
+        base_options = {
+            "cwd": str(self.initial_directory),
+            "env": clean_child_process_environment_map(),
+        }
+        candidates = self._pty_backend_candidates or [("pty", None)]
+        last_error: Exception | None = None
+        for backend_name, backend in candidates:
+            spawn_options = dict(base_options)
+            if backend is not None:
+                spawn_options["backend"] = backend
+            try:
+                with clean_windows_dll_directory_for_child_process():
+                    self._process = self._pty_process_class.spawn(argv, **spawn_options)
+            except Exception as exc:
+                last_error = exc
+                continue
+            self._active_backend_name = backend_name
+            break
+        else:
+            assert last_error is not None
+            raise last_error
         self._stop_reader.clear()
         self._reader_thread = threading.Thread(target=self._read_loop, name="winpty-reader", daemon=True)
         self._reader_thread.start()

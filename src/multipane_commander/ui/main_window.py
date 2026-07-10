@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import logging
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtCore import QEvent, QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,14 +24,17 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.ui.dialogs import TextEntryDialog, ask_confirmation, show_message
 from multipane_commander.bootstrap import AppContext, persist_app_context
+from multipane_commander.config.load import load_config
 from multipane_commander.services.ai import AgentRunner, PaneRoots
 from multipane_commander.services.bookmarks import BookmarkStore
+from multipane_commander.services.env_path import PathSnapshot, path_snapshot
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
 from multipane_commander.services.undo import UndoRecord, UndoStack
 from multipane_commander.platform import root_paths, root_section_label, same_filesystem
 from multipane_commander.ui.command_bar import CommandBar
+from multipane_commander.ui.env_path_dialog import EnvPathDialog
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
@@ -61,6 +66,23 @@ _BINARY_SUFFIXES = frozenset({
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".class", ".jar", ".pyc", ".o", ".a",
 })
+
+
+logger = logging.getLogger(__name__)
+
+
+def help_document_path() -> Path | None:
+    candidates = [
+        Path.cwd() / "HELP.html",
+    ]
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        candidates.append(Path(bundle_root) / "HELP.html")
+    candidates.append(Path(__file__).resolve().parents[3] / "HELP.html")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _path_is_binary(path: Path) -> bool:
@@ -207,9 +229,6 @@ class MainWindow(QMainWindow):
         self.content_splitter = content_splitter
         root_layout.addWidget(content_splitter, 1)
 
-        self.command_bar = CommandBar()
-        root_layout.addWidget(self.command_bar)
-
         self.jobs_view.setVisible(False)
         root_layout.addWidget(self.jobs_view)
         self.function_bar = build_function_key_bar(
@@ -307,6 +326,7 @@ class MainWindow(QMainWindow):
             ("F7", "MkDir", self._mkdir_in_active_pane),
             ("F8", "Delete", self._delete_from_active_pane),
             ("Ctrl+R", "Refresh", self._refresh_active_pane),
+            ("Ctrl+P", "PATH", self._open_path_editor),
             ("F9", "Terminal", self._toggle_terminal),
             ("F10", "Menu", self._show_main_menu),
             ("F11", "Layout", self._show_layout_menu),
@@ -319,6 +339,7 @@ class MainWindow(QMainWindow):
         self._previous_pane_shortcut = QShortcut(
             QKeySequence(Qt.Key.Key_Backtab), self, activated=self._focus_previous_pane
         )
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=self._show_help)
         QShortcut(QKeySequence(Qt.Key.Key_F2), self, activated=self._rename_in_active_pane)
         QShortcut(QKeySequence(Qt.Key.Key_F3), self, activated=self._toggle_passive_quick_view)
         QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
@@ -375,6 +396,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+I"), self, activated=self._toggle_ai_pane)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self, activated=self._toggle_ai_chat)
         QShortcut(QKeySequence("Ctrl+G"), self, activated=self._focus_command_bar)
+        QShortcut(QKeySequence("Ctrl+P"), self, activated=self._open_path_editor)
 
     def _bind_command_bar(self) -> None:
         if self.command_bar is None:
@@ -516,10 +538,13 @@ class MainWindow(QMainWindow):
         side_by_side_index = self._side_by_side_file_pane_index()
         if side_by_side_index is not None:
             index = side_by_side_index
+        previous_index = self.context.state.layout.active_pane_index
         self.context.state.layout.active_pane_index = index
         for pane_index, pane_view in enumerate(self.pane_views):
             pane_view.set_active(pane_index == index)
         new_active = self._active_pane()
+        if index != previous_index:
+            new_active.refresh()
         # Route focus to the file list whenever a pane becomes active so
         # arrows / Enter / Space drive the cursor immediately. Skip if the
         # user is typing in the quick-filter bar (we don't want to steal
@@ -622,13 +647,101 @@ class MainWindow(QMainWindow):
         self._active_pane().toggle_thumbnail_mode()
 
     def _show_help(self) -> None:
+        help_path = help_document_path()
+        if help_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(help_path)))
+            return
         show_message(
             parent=self,
             title="Help",
-            message="Function key actions are available from the bottom bar and keyboard shortcuts.",
+            message="HELP.html was not found. Function key actions are available from the bottom bar.",
             level="info",
             accept_label="Close",
         )
+
+    def _open_path_editor(self) -> None:
+        snapshot = path_snapshot()
+        metadata: list[tuple[str, str]] | None = None
+        if self.context.config.env_path.entries:
+            snapshot = PathSnapshot(
+                process_entries=self.context.config.env_path.entries,
+                user_entries=snapshot.user_entries,
+                machine_entries=snapshot.machine_entries,
+            )
+            if (
+                len(self.context.config.env_path.sources) == len(self.context.config.env_path.entries)
+                and len(self.context.config.env_path.original_entries) == len(self.context.config.env_path.entries)
+            ):
+                metadata = list(
+                    zip(
+                        self.context.config.env_path.sources,
+                        self.context.config.env_path.original_entries,
+                        strict=False,
+                    )
+                )
+        dialog = EnvPathDialog(
+            parent=self,
+            snapshot=snapshot,
+            metadata=metadata,
+            save_app_entries=self._save_app_path_entries,
+            clear_app_entries=self._clear_app_path_entries,
+        )
+        dialog.exec()
+
+    def _save_app_path_entries(
+        self,
+        entries: list[str],
+        sources: list[str],
+        original_entries: list[str],
+    ) -> None:
+        logger.info(
+            "PATH Save in App persisting config: entries=%s sources=%s original_entries=%s",
+            entries,
+            sources,
+            original_entries,
+        )
+        self.context.config.env_path.entries = entries
+        self.context.config.env_path.sources = sources
+        self.context.config.env_path.original_entries = original_entries
+        persist_app_context(self.context)
+        reloaded = load_config().env_path
+        verified = (
+            reloaded.entries == entries
+            and reloaded.sources == sources
+            and reloaded.original_entries == original_entries
+        )
+        if verified:
+            logger.info("PATH Save in App verification ok: reloaded_entries=%s", reloaded.entries)
+        else:
+            logger.warning(
+                "PATH Save in App verification mismatch: expected_entries=%s "
+                "reloaded_entries=%s expected_sources=%s reloaded_sources=%s "
+                "expected_original_entries=%s reloaded_original_entries=%s",
+                entries,
+                reloaded.entries,
+                sources,
+                reloaded.sources,
+                original_entries,
+                reloaded.original_entries,
+            )
+
+    def _clear_app_path_entries(self) -> None:
+        logger.info("PATH app override cleared after Windows save")
+        self.context.config.env_path.entries = []
+        self.context.config.env_path.sources = []
+        self.context.config.env_path.original_entries = []
+        persist_app_context(self.context)
+        reloaded = load_config().env_path
+        if reloaded.entries or reloaded.sources or reloaded.original_entries:
+            logger.warning(
+                "PATH app override clear verification mismatch: reloaded_entries=%s "
+                "reloaded_sources=%s reloaded_original_entries=%s",
+                reloaded.entries,
+                reloaded.sources,
+                reloaded.original_entries,
+            )
+        else:
+            logger.info("PATH app override clear verification ok")
 
     def _view_in_active_pane(self) -> None:
         self._toggle_passive_quick_view()
@@ -709,6 +822,9 @@ class MainWindow(QMainWindow):
         close_tab_action = QAction("Close Tab (Ctrl+W)", self)
         close_tab_action.triggered.connect(self._close_tab_in_active_pane)
         commands_menu.addAction(close_tab_action)
+        path_action = QAction("Edit PATH (Ctrl+P)", self)
+        path_action.triggered.connect(self._open_path_editor)
+        commands_menu.addAction(path_action)
 
         show_menu = menu.addMenu("Show")
         terminal_action = QAction("Toggle Terminal (F9)", self)
@@ -1196,8 +1312,12 @@ class MainWindow(QMainWindow):
         focus_widget = QApplication.focusWidget()
         return focus_widget is not None and self.terminal_dock.isAncestorOf(focus_widget)
 
+    def event(self, event) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.WindowActivate:
+            self._refresh_all_panes()
+        return super().event(event)
+
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
-        from PySide6.QtCore import QEvent
         from PySide6.QtGui import QKeyEvent
         if (
             event.type() == QEvent.Type.KeyPress
@@ -1224,6 +1344,10 @@ class MainWindow(QMainWindow):
 
     def _on_focus_changed(self, _old, _now) -> None:
         self._update_terminal_tab_shortcuts()
+
+    def _refresh_all_panes(self) -> None:
+        for pane_view in self.pane_views:
+            pane_view.refresh()
 
     def _update_terminal_tab_shortcuts(self) -> None:
         enabled = not self._terminal_has_focus() or self._is_side_by_side_layout()
@@ -1807,6 +1931,8 @@ class MainWindow(QMainWindow):
         self.terminal_dock.toggle_visible()
         if not self.terminal_dock.isVisible() and self.context.state.layout.terminal_maximized:
             self._set_terminal_maximized(False)
+        self.context.config.show_terminal = self.terminal_dock.isVisible()
+        persist_app_context(self.context)
 
     def _focus_terminal(self) -> None:
         if not self.terminal_dock.isVisible():
@@ -2012,7 +2138,8 @@ QComboBox,
 QListWidget,
 QTextEdit,
 QPlainTextEdit,
-QTreeWidget {
+QTreeWidget,
+QTableWidget {
     background: #0b1324;
     color: #e7edf8;
     border: 1px solid #263754;
@@ -2028,6 +2155,12 @@ QPlainTextEdit#quickViewText {
 }
 QPlainTextEdit#quickViewText {
     border-radius: 12px;
+}
+QHeaderView::section {
+    background: #13203a;
+    color: #d7e7ff;
+    border: 1px solid #263754;
+    padding: 6px;
 }
 QLabel#quickViewImage {
     background: #0b1324;

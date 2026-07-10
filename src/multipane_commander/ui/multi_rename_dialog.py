@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
+
 
 _COUNTER_RE = re.compile(r"\[C(?:0(\d+))?\]")
 
@@ -131,7 +133,13 @@ class MultiRenameDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Rename")
+        rename_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        rename_button.setText("Rename")
+        rename_button.setDefault(True)
+        rename_button.setAutoDefault(True)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_button is not None:
+            cancel_button.setAutoDefault(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -139,6 +147,7 @@ class MultiRenameDialog(QDialog):
         self._name_input.textChanged.connect(self._refresh_preview)
         self._ext_input.textChanged.connect(self._refresh_preview)
         self._refresh_preview()
+        install_dialog_key_bindings(self, accept=rename_button.click)
 
     def previews(self) -> list[RenamePreview]:
         return build_preview(

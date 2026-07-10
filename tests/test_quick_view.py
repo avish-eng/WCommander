@@ -18,6 +18,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Signal as _Signal
@@ -143,6 +145,7 @@ def test_R0_3_quick_view_none_resets_state(tmp_path: Path) -> None:
     assert view._current_pixmap is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows chmod does not remove read permission")
 def test_R0_3_quick_view_unreadable_file(tmp_path: Path) -> None:
     target = tmp_path / "no-perm.txt"
     target.write_text("hidden", encoding="utf-8")

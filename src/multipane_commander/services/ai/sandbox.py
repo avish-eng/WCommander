@@ -3,18 +3,21 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import (
-    PermissionResultAllow,
-    PermissionResultDeny,
-    ToolPermissionContext,
-)
+if TYPE_CHECKING:
+    from claude_agent_sdk import (
+        PermissionResultAllow,
+        PermissionResultDeny,
+        ToolPermissionContext,
+    )
 
-CanUseToolFn = Callable[
-    [str, dict[str, Any], ToolPermissionContext],
-    Awaitable[PermissionResultAllow | PermissionResultDeny],
-]
+    CanUseToolFn = Callable[
+        [str, dict[str, Any], ToolPermissionContext],
+        Awaitable[PermissionResultAllow | PermissionResultDeny],
+    ]
+else:
+    CanUseToolFn = Callable[[str, dict[str, Any], Any], Awaitable[Any]]
 
 # Tool-input field names that carry filesystem paths the agent wants to touch.
 # Anything not in this map is treated as a non-path tool — it's allowed only
@@ -61,12 +64,21 @@ def make_can_use_tool(roots: PaneRoots) -> CanUseToolFn:
     sandbox so the agent can recover within the same turn instead of
     crashing the session.
     """
+    try:
+        from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+    except ModuleNotFoundError as exc:
+        if exc.name != "claude_agent_sdk":
+            raise
+        raise RuntimeError(
+            "Claude Agent SDK is not installed. Install project dependencies "
+            "with Python 3.12 or newer to enable AI features."
+        ) from exc
 
     async def can_use_tool(
         tool_name: str,
         tool_input: dict[str, Any],
-        _context: ToolPermissionContext,
-    ) -> PermissionResultAllow | PermissionResultDeny:
+        _context: Any,
+    ) -> Any:
         path_fields = _PATH_FIELDS_BY_TOOL.get(tool_name)
         if path_fields is None:
             return PermissionResultAllow()

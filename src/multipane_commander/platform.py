@@ -69,7 +69,7 @@ def pick_shell() -> ShellSpec:
         return ShellSpec(program=pwsh, args=["-NoLogo"], kind="pwsh")
 
     if is_windows():
-        return ShellSpec(program="cmd.exe", args=[], kind="cmd")
+        return ShellSpec(program=windows_cmd_program(), args=[], kind="cmd")
 
     shell_env = os.environ.get("SHELL")
     if shell_env:
@@ -83,6 +83,23 @@ def pick_shell() -> ShellSpec:
             return ShellSpec(program=program, args=["-i"], kind="posix")
 
     return ShellSpec(program="/bin/sh", args=["-i"], kind="posix")
+
+
+def windows_cmd_program() -> str:
+    comspec = os.environ.get("COMSPEC")
+    if comspec:
+        expanded_comspec = os.path.expandvars(comspec)
+        if Path(expanded_comspec).is_file():
+            return expanded_comspec
+
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    system_cmd = Path(system_root) / "System32" / "cmd.exe"
+    if system_cmd.is_file():
+        return str(system_cmd)
+
+    if comspec:
+        return os.path.expandvars(comspec)
+    return "cmd.exe"
 
 
 def shell_line_ending(shell_kind: str) -> str:

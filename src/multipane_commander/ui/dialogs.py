@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
+
 
 class TextEntryDialog(QDialog):
     def __init__(
@@ -95,6 +97,7 @@ class TextEntryDialog(QDialog):
         if select_all:
             self.input.selectAll()
         self.input.setFocus(Qt.FocusReason.OtherFocusReason)
+        install_dialog_key_bindings(self, accept=accept_button.click)
 
     def value(self) -> str:
         return self.input.text()

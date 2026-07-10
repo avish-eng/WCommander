@@ -1,0 +1,20 @@
+# Runtime dependencies for Multi-Pane Commander.
+#
+# Note: libarchive-c is the Python wrapper only. Archive browsing/extraction
+# also needs the native libarchive runtime installed and discoverable on PATH.
+PySide6
+send2trash
+pywinpty
+py7zr
+libarchive-c
+watchdog
+pygments
+claude-agent-sdk
+mistune>=3.0
+
+# Test/lint tools used by the current checks.
+pytest
+ruff
+
+# Build tool for producing the Windows executable.
+pyinstaller

@@ -9,15 +9,6 @@ import threading
 import uuid
 from pathlib import Path
 
-# Namespace UUID for WCommander CC sessions — ensures our deterministic UUIDs
-# never collide with sessions the user started manually from the terminal.
-_WC_SESSION_NS = uuid.UUID("7c9e6679-7425-40de-944b-e07fc1f90ae7")
-
-
-def _session_id_for(path: Path) -> str:
-    """Stable UUID v5 for this directory path, namespaced to WCommander."""
-    return str(uuid.uuid5(_WC_SESSION_NS, str(path.resolve())))
-
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFrame,
@@ -36,6 +27,16 @@ try:
     _WEB_AVAILABLE = True
 except ImportError:
     _WEB_AVAILABLE = False
+
+
+# Namespace UUID for WCommander CC sessions. This keeps our deterministic UUIDs
+# separate from sessions the user started manually from the terminal.
+_WC_SESSION_NS = uuid.UUID("7c9e6679-7425-40de-944b-e07fc1f90ae7")
+
+
+def _session_id_for(path: Path) -> str:
+    """Stable UUID v5 for this directory path, namespaced to WCommander."""
+    return str(uuid.uuid5(_WC_SESSION_NS, str(path.resolve())))
 
 
 # xterm.js loaded from jsDelivr CDN (cached after first load).
@@ -170,7 +171,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e2e; }
 
 
 class _ClaudeProcess(QObject):
-    """Runs `claude` in a POSIX PTY and streams base64-encoded output."""
+    """Runs `claude` in a PTY and streams base64-encoded output."""
 
     output_b64 = Signal(str)
     finished = Signal()
@@ -181,6 +182,7 @@ class _ClaudeProcess(QObject):
         super().__init__()
         self._master_fd: int | None = None
         self._process: subprocess.Popen | None = None
+        self._winpty_process = None
         self._reader: threading.Thread | None = None
         self._stop = threading.Event()
         self._cols = 80
@@ -202,15 +204,16 @@ class _ClaudeProcess(QObject):
             )
             return
 
-        if platform.system() == "Windows":
-            self._emit_msg("\r\n[Windows PTY not supported yet]\r\n")
-            return
-
         args = [claude]
         if session_id:
             args += ["--session-id", session_id]
         for d in extra_dirs:
             args += ["--add-dir", str(d)]
+
+        env = self._terminal_env()
+        if platform.system() == "Windows":
+            self._start_windows_pty(args, cwd, env)
+            return
 
         try:
             import pty
@@ -222,14 +225,6 @@ class _ClaudeProcess(QObject):
 
         self._master_fd = master_fd
         self._stop.clear()
-
-        # Explicit terminal environment so Claude uses full 24-bit color and
-        # renders its interactive picker/selection highlights correctly.
-        env = os.environ.copy()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env.pop("NO_COLOR", None)
-        env.pop("FORCE_NO_COLOR", None)
 
         try:
             self._process = subprocess.Popen(
@@ -255,8 +250,75 @@ class _ClaudeProcess(QObject):
         )
         self._reader.start()
 
+    def _terminal_env(self) -> dict[str, str]:
+        # Explicit terminal environment so Claude uses full 24-bit color and
+        # renders its interactive picker/selection highlights correctly.
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env.pop("NO_COLOR", None)
+        env.pop("FORCE_NO_COLOR", None)
+        return env
+
+    def _start_windows_pty(self, args: list[str], cwd: Path, env: dict[str, str]) -> None:
+        try:
+            from winpty import Backend, PtyProcess
+        except ImportError as exc:
+            self._emit_msg(f"\r\n\x1b[31mWinPTY unavailable: {exc}\x1b[0m\r\n")
+            return
+
+        spawn_options = {
+            "cwd": str(cwd),
+            "env": env,
+            "dimensions": (self._rows, self._cols),
+        }
+        winpty_backend = getattr(Backend, "WinPTY", None)
+        if winpty_backend is not None:
+            spawn_options["backend"] = winpty_backend
+
+        self._stop.clear()
+        try:
+            self._winpty_process = PtyProcess.spawn(args, **spawn_options)
+        except Exception as exc:
+            if winpty_backend is None:
+                self._emit_msg(f"\r\n\x1b[31mFailed to launch claude: {exc}\x1b[0m\r\n")
+                return
+            try:
+                self._winpty_process = PtyProcess.spawn(
+                    args,
+                    cwd=str(cwd),
+                    env=env,
+                    dimensions=(self._rows, self._cols),
+                )
+            except Exception as fallback_exc:
+                self._emit_msg(
+                    f"\r\n\x1b[31mFailed to launch claude: {fallback_exc}\x1b[0m\r\n"
+                )
+                return
+
+        self._pty_cols = self._cols
+        self._pty_rows = self._rows
+        self._reader = threading.Thread(
+            target=self._read_winpty_loop, daemon=True, name="claude-winpty"
+        )
+        self._reader.start()
+
     def stop(self) -> None:
         self._stop.set()
+        winpty_process, self._winpty_process = self._winpty_process, None
+        if winpty_process is not None:
+            for method_name in ("terminate", "kill", "close"):
+                method = getattr(winpty_process, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    method()
+                except TypeError:
+                    method(True)
+                except Exception:
+                    continue
+                break
+
         process, self._process = self._process, None
         if process is not None and process.poll() is None:
             process.terminate()
@@ -267,6 +329,14 @@ class _ClaudeProcess(QObject):
         self._close_fd()
 
     def write_bytes(self, data: bytes) -> None:
+        winpty_process = self._winpty_process
+        if winpty_process is not None:
+            try:
+                winpty_process.write(data.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
+            return
+
         fd = self._master_fd
         if fd is not None:
             try:
@@ -277,6 +347,28 @@ class _ClaudeProcess(QObject):
     def resize(self, cols: int, rows: int) -> None:
         self._cols = max(1, cols)
         self._rows = max(1, rows)
+        winpty_process = self._winpty_process
+        if winpty_process is not None and cols > 0 and rows > 0:
+            if self._cols == self._pty_cols and self._rows == self._pty_rows:
+                return
+            for method_name in ("setwinsize", "set_size"):
+                method = getattr(winpty_process, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    method(self._rows, self._cols)
+                except TypeError:
+                    try:
+                        method(self._cols, self._rows)
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                self._pty_cols = self._cols
+                self._pty_rows = self._rows
+                break
+            return
+
         fd = self._master_fd
         if fd is None or cols <= 0 or rows <= 0:
             return
@@ -294,6 +386,12 @@ class _ClaudeProcess(QObject):
             pass
 
     def is_running(self) -> bool:
+        winpty_process = self._winpty_process
+        if winpty_process is not None:
+            try:
+                return bool(winpty_process.isalive())
+            except Exception:
+                return False
         return self._process is not None and self._process.poll() is None
 
     def replay(self, write_fn) -> None:
@@ -330,6 +428,33 @@ class _ClaudeProcess(QObject):
             self._append_buffer(chunk)
             self.output_b64.emit(base64.b64encode(chunk).decode("ascii"))
         self._close_fd()
+        self.finished.emit()
+
+    def _read_winpty_loop(self) -> None:
+        while not self._stop.is_set():
+            process = self._winpty_process
+            if process is None:
+                break
+            try:
+                chunk = process.read()
+            except EOFError:
+                break
+            except Exception:
+                if not self.is_running():
+                    break
+                continue
+            if not chunk:
+                if not self.is_running():
+                    break
+                continue
+            if isinstance(chunk, bytes):
+                data = chunk
+            else:
+                data = str(chunk).encode("utf-8", errors="replace")
+            self._append_buffer(data)
+            self.output_b64.emit(base64.b64encode(data).decode("ascii"))
+        self._pty_cols = 0
+        self._pty_rows = 0
         self.finished.emit()
 
     def _close_fd(self) -> None:

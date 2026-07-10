@@ -1,7 +1,7 @@
 import json
 
 from multipane_commander.config.load import load_config, save_config
-from multipane_commander.config.model import AppConfig, TerminalConfig, ThemeConfig, ThemeDefinition
+from multipane_commander.config.model import AppConfig, EnvPathConfig, TerminalConfig, ThemeConfig, ThemeDefinition
 
 
 def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monkeypatch) -> None:
@@ -37,6 +37,11 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
             history_panel_visible=True,
             experimental_pty=True,
         ),
+        env_path=EnvPathConfig(
+            entries=["C:\\Tools", "C:\\Python"],
+            sources=["user", "machine"],
+            original_entries=["C:\\Tools", "%SystemRoot%\\Python"],
+        ),
         follow_active_pane_terminal=False,
         show_terminal=False,
     )
@@ -53,6 +58,9 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
     assert loaded.terminal.bookmarked_commands == ["python run_app.py"]
     assert loaded.terminal.history_panel_visible is True
     assert loaded.terminal.experimental_pty is True
+    assert loaded.env_path.entries == ["C:\\Tools", "C:\\Python"]
+    assert loaded.env_path.sources == ["user", "machine"]
+    assert loaded.env_path.original_entries == ["C:\\Tools", "%SystemRoot%\\Python"]
     assert loaded.follow_active_pane_terminal is False
     assert loaded.show_terminal is False
 
@@ -78,6 +86,11 @@ def test_config_store_handles_malformed_values(tmp_path, monkeypatch) -> None:
                 "terminal": {
                     "experimental_pty": "false",
                 },
+                "env_path": {
+                    "entries": ["C:\\Tools"],
+                    "sources": ["invalid", "user"],
+                    "original_entries": ["C:\\Tools", "C:\\Other"],
+                },
                 "follow_active_pane_terminal": "false",
                 "show_terminal": None,
             }
@@ -90,5 +103,8 @@ def test_config_store_handles_malformed_values(tmp_path, monkeypatch) -> None:
     assert loaded.theme.selected_theme_id == "windows-commander"
     assert loaded.theme.custom_themes == []
     assert loaded.terminal.experimental_pty is False
+    assert loaded.env_path.entries == ["C:\\Tools"]
+    assert loaded.env_path.sources == ["session"]
+    assert loaded.env_path.original_entries == [""]
     assert loaded.follow_active_pane_terminal is False
     assert loaded.show_terminal is True

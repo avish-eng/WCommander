@@ -45,6 +45,40 @@ from multipane_commander.ui.folder_browser import FolderBrowser
 from multipane_commander.ui.quick_view import QuickViewWidget
 from multipane_commander.ui.themes import ThemePalette, build_palette, builtin_themes
 
+_INTERNAL_DRAG_MIME_TYPE = "application/x-multipane-commander-paths"
+
+
+def build_file_drag_mime_data(source_paths: list[Path]) -> QMimeData:
+    """Build a drag payload understood by MPC and native applications."""
+    mime_data = QMimeData()
+    payload = json.dumps({"paths": [str(path) for path in source_paths]}).encode("utf-8")
+    mime_data.setData(_INTERNAL_DRAG_MIME_TYPE, payload)
+    # Local-file URLs become the platform's native file-drop format
+    # (CF_HDROP on Windows), which browsers and other applications understand.
+    mime_data.setUrls([QUrl.fromLocalFile(str(path.resolve())) for path in source_paths])
+    return mime_data
+
+
+def decode_file_drag_paths(mime_data: QMimeData) -> list[Path]:
+    """Read paths from an MPC payload or a standard external file drag."""
+    if mime_data.hasFormat(_INTERNAL_DRAG_MIME_TYPE):
+        try:
+            payload = json.loads(
+                bytes(mime_data.data(_INTERNAL_DRAG_MIME_TYPE)).decode("utf-8")
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        paths = [
+            Path(path_str)
+            for path_str in payload.get("paths", [])
+            if isinstance(path_str, str) and path_str
+        ]
+        if paths:
+            return paths
+
+    return [Path(url.toLocalFile()) for url in mime_data.urls() if url.isLocalFile()]
+
+
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -122,7 +156,7 @@ class _CursorRowDelegate(QStyledItemDelegate):
 
 
 class PaneView(QFrame):
-    _DRAG_MIME_TYPE = "application/x-multipane-commander-paths"
+    _DRAG_MIME_TYPE = _INTERNAL_DRAG_MIME_TYPE
 
     activated = Signal(object)
     operation_requested = Signal(str)
@@ -860,11 +894,11 @@ class PaneView(QFrame):
 
     def _start_internal_drag(self, viewport: QWidget, source_paths: list[Path]) -> None:
         drag = QDrag(viewport)
-        mime_data = QMimeData()
-        payload = json.dumps({"paths": [str(path) for path in source_paths]}).encode("utf-8")
-        mime_data.setData(self._DRAG_MIME_TYPE, payload)
-        drag.setMimeData(mime_data)
-        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
+        drag.setMimeData(build_file_drag_mime_data(source_paths))
+        drag.exec(
+            Qt.DropAction.CopyAction | Qt.DropAction.MoveAction,
+            Qt.DropAction.CopyAction,
+        )
 
     def _begin_marquee(self, viewport: QWidget, origin: QPoint) -> None:
         self.activated.emit(self)
@@ -940,17 +974,7 @@ class PaneView(QFrame):
         return None
 
     def _decode_drag_paths(self, mime_data: QMimeData) -> list[Path]:
-        if not mime_data.hasFormat(self._DRAG_MIME_TYPE):
-            return []
-        try:
-            payload = json.loads(bytes(mime_data.data(self._DRAG_MIME_TYPE)).decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return []
-        paths = []
-        for path_str in payload.get("paths", []):
-            if isinstance(path_str, str) and path_str:
-                paths.append(Path(path_str))
-        return paths
+        return decode_file_drag_paths(mime_data)
 
     def _update_drop_target(self, destination_dir: Path | None) -> None:
         if destination_dir == self._drop_target_dir:

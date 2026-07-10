@@ -5,4 +5,8 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+.claude/
+.tmp_exe_appdata_*/
+build_*/
+dist_*/
 .clone-meta.json

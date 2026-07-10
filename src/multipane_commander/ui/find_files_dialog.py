@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
+
 
 _MAX_RESULTS = 5_000
 _CONTENT_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
@@ -128,11 +130,22 @@ class FindFilesDialog(QDialog):
         buttons = QDialogButtonBox()
         search_button = buttons.addButton("Search", QDialogButtonBox.ButtonRole.AcceptRole)
         close_button = buttons.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
+        search_button.setDefault(True)
+        search_button.setAutoDefault(True)
+        close_button.setAutoDefault(False)
         search_button.clicked.connect(self._run_search)
         close_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
+        self._name_input.returnPressed.connect(search_button.click)
+        self._content_input.returnPressed.connect(search_button.click)
         self._name_input.setFocus()
+        install_dialog_key_bindings(
+            self,
+            accept=search_button.click,
+            ignore_accept_for=lambda widget: widget is self._results_list
+            or self._results_list.isAncestorOf(widget),
+        )
 
     def _run_search(self) -> None:
         results = find_files(

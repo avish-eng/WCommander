@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from multipane_commander.ui.terminal_dock import TerminalDock
 
@@ -21,13 +21,16 @@ class FakeSignal:
 class FakeSession:
     def __init__(self) -> None:
         self.backend_name = "fake"
+        self.shell_kind = "pwsh"
         self.output_received = FakeSignal()
         self.started = FakeSignal()
         self.interrupts = 0
         self.force_kills = 0
+        self.starts = 0
+        self.backend = self
 
     def start(self) -> None:
-        return None
+        self.starts += 1
 
     def stop(self) -> None:
         return None
@@ -49,6 +52,9 @@ class FakeSession:
 
     def force_kill_current_program(self) -> None:
         self.force_kills += 1
+
+    def is_running(self) -> bool:
+        return self.starts > 0
 
 
 def _qapp() -> QApplication:
@@ -106,3 +112,102 @@ def test_terminal_dock_force_kill_delegates_to_session(monkeypatch, tmp_path: Pa
     dock.force_kill_current_program()
 
     assert fake_session.force_kills == 1
+
+
+def test_terminal_dock_does_not_start_shell_when_hidden(monkeypatch, tmp_path: Path) -> None:
+    _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+
+    TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+    )
+
+    assert fake_session.starts == 0
+
+
+def test_terminal_dock_starts_shell_when_visible(monkeypatch, tmp_path: Path) -> None:
+    _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+
+    TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+    )
+
+    assert fake_session.starts == 1
+
+
+def test_terminal_dock_prefers_pty_for_xterm(monkeypatch, tmp_path: Path) -> None:
+    fake_session = FakeSession()
+    requested_modes: list[bool] = []
+
+    def build_session(dock, _path):
+        requested_modes.append(dock._experimental_pty)
+        return fake_session
+
+    monkeypatch.setattr("multipane_commander.ui.terminal_dock.WEB_TERMINAL_AVAILABLE", True)
+    monkeypatch.setattr(TerminalDock, "_build_session", build_session)
+
+    TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+        experimental_pty=False,
+    )
+
+    assert requested_modes == [True]
+
+
+def test_terminal_dock_shows_frontend_shell_and_backend_beside_title(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _qapp()
+    fake_session = FakeSession()
+    fake_session.backend_name = "conpty"
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+    )
+
+    dock._handle_started()
+
+    assert dock.runtime_label.text() == "xterm.js · PowerShell 7 · ConPTY"
+    assert "[terminal]" not in dock.output.toPlainText()
+
+
+def test_terminal_history_uses_item_context_menus(monkeypatch, tmp_path: Path) -> None:
+    app = _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+        recent_commands=["dir"],
+        bookmarked_commands=["cls"],
+        history_panel_visible=True,
+    )
+    app.processEvents()
+
+    assert dock.findChildren(QPushButton, "terminalHistoryActionButton") == []
+
+    recent_menu = dock._build_command_context_menu(dock.recent_list, "dir")
+    bookmark_menu = dock._build_command_context_menu(dock.bookmarks_list, "cls")
+
+    assert [action.text() for action in recent_menu.actions() if not action.isSeparator()] == [
+        "Use command",
+        "Run command",
+        "Pin command",
+    ]
+    assert [action.text() for action in bookmark_menu.actions() if not action.isSeparator()] == [
+        "Use command",
+        "Run command",
+        "Unpin command",
+    ]
