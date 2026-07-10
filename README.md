@@ -46,7 +46,7 @@ Beyond the basics:
 | `Shift+F8` / `Shift+Del` | Permanent delete (bypass Recycle Bin) |
 | `Ctrl+Enter` / `Alt+Enter` | Paste cursor name / full path into the terminal |
 | `Alt+Arrow` | Focus pane in that direction |
-| `Alt+1` … `Alt+6` | Layout presets (default, focus-files, focus-terminal, terminal-right, terminal-left, balanced) |
+| `Alt+1` … `Alt+7` | Layout presets (Alt+7 uses a compact left-pane window; F9 adds the terminal below it) |
 | `Space` (on a directory) | Compute recursive size |
 | `Shift+F3` / `Shift+F4` | Open in OS-associated viewer / default app |
 

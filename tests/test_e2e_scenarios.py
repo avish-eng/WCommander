@@ -157,6 +157,51 @@ def test_e2e_terminal_toggle_persists_visibility(tmp_path: Path, monkeypatch) ->
         _close_window(window)
 
 
+def test_e2e_alt_7_applies_persistent_left_pane_only_layout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(TerminalDock, "_ensure_session_started", lambda _self: True)
+    left, right = _setup_split(tmp_path)
+    window = _make_main_window(left, right)
+
+    try:
+        expanded_width = window.width()
+        QTest.keyClick(window, Qt.Key.Key_7, Qt.KeyboardModifier.AltModifier)
+        QApplication.processEvents()
+
+        assert window.context.state.layout.layout_mode == "single_left"
+        assert window.context.state.layout.active_pane_index == 0
+        assert window.pane_views[0].isVisible()
+        assert not window.pane_views[1].isVisible()
+        assert not window.terminal_dock.isVisible()
+        assert not window.jobs_view.isVisible()
+        assert window._ai_pane is not None and not window._ai_pane.isVisible()
+        assert window.layout_chip.text() == "Layout: Left Only"
+        assert window.width() < expanded_width
+
+        window._toggle_terminal()
+        QApplication.processEvents()
+
+        compact_width = window.width()
+        assert window.context.state.layout.layout_mode == "single_left"
+        assert window.pane_views[0].isVisible()
+        assert not window.pane_views[1].isVisible()
+        assert window.terminal_dock.isVisible()
+        assert window.layout_chip.text() == "Layout: Left + Term"
+        assert compact_width < expanded_width
+
+        window._apply_default_workspace_layout()
+        QApplication.processEvents()
+
+        assert window.context.state.layout.layout_mode == "stacked"
+        assert window.pane_views[0].isVisible()
+        assert window.pane_views[1].isVisible()
+        assert window.terminal_dock.isVisible()
+        assert window.width() >= expanded_width
+    finally:
+        _close_window(window)
+
+
 def test_e2e_arrow_keys_move_cursor_in_active_pane(tmp_path: Path) -> None:
     left, right = _setup_split(tmp_path)
     (left / "alpha.txt").write_text("a")

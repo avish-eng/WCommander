@@ -191,6 +191,7 @@ Computes recursive size and updates the Size column. Synchronous, capped at 50 0
 | `Alt+4` | Terminal right |
 | `Alt+5` | Terminal left |
 | `Alt+6` | Balanced |
+| `Alt+7` | Compact left pane only; press `F9` to add the terminal below it |
 
 ---
 

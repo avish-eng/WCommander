@@ -171,6 +171,8 @@ class MainWindow(QMainWindow):
         self._next_pane_shortcut: QShortcut | None = None
         self._previous_pane_shortcut: QShortcut | None = None
         self._side_by_side_previous_active_pane_index = self.context.state.layout.active_pane_index
+        self._single_left_previous_geometry = None
+        self._single_left_previous_maximized = False
         self.pane_views: list[PaneView] = []
         self.jobs_view = JobsView()
         self.terminal_dock = TerminalDock(
@@ -192,7 +194,10 @@ class MainWindow(QMainWindow):
         self._update_layout_chip()
         if not self._is_side_by_side_layout():
             self._set_terminal_maximized(self.context.state.layout.terminal_maximized, persist=False)
-        if self.context.state.window.is_maximized:
+        if (
+            self.context.state.window.is_maximized
+            and self.context.state.layout.layout_mode != "single_left"
+        ):
             self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self._bind_shortcuts()
         self._bind_command_bar()
@@ -370,6 +375,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Alt+4"), self, activated=self._apply_terminal_right_layout)
         QShortcut(QKeySequence("Alt+5"), self, activated=self._apply_terminal_left_layout)
         QShortcut(QKeySequence("Alt+6"), self, activated=self._apply_balanced_layout)
+        QShortcut(QKeySequence("Alt+7"), self, activated=self._apply_single_left_layout)
         QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._paste_active_filename_to_terminal)
         QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._paste_active_filename_to_terminal)
         QShortcut(QKeySequence("Alt+Return"), self, activated=self._paste_active_full_path_to_terminal)
@@ -858,6 +864,12 @@ class MainWindow(QMainWindow):
         focus_files_action.triggered.connect(self._apply_focus_files_layout)
         menu.addAction(focus_files_action)
 
+        single_left_action = QAction("Left Pane Only", self)
+        single_left_action.setCheckable(True)
+        single_left_action.setChecked(active_preset == "single_left")
+        single_left_action.triggered.connect(self._apply_single_left_layout)
+        menu.addAction(single_left_action)
+
         focus_terminal_action = QAction("Focus Terminal", self)
         focus_terminal_action.setCheckable(True)
         focus_terminal_action.setChecked(active_preset == "focus_terminal")
@@ -940,6 +952,9 @@ class MainWindow(QMainWindow):
         self.terminal_dock.set_history_panel_visible(False)
         persist_app_context(self.context)
 
+    def _apply_single_left_layout(self) -> None:
+        self._apply_layout_mode("single_left")
+
     def _apply_focus_terminal_layout(self) -> None:
         self._apply_layout_mode("stacked", persist=False)
         if not self.terminal_dock.isVisible():
@@ -997,6 +1012,8 @@ class MainWindow(QMainWindow):
         self.terminal_dock.set_history_panel_visible(not visible)
 
     def _active_layout_preset(self) -> str | None:
+        if self.context.state.layout.layout_mode == "single_left":
+            return "single_left"
         if self.context.state.layout.layout_mode == "terminal_right":
             return "terminal_right"
         if self.context.state.layout.layout_mode == "terminal_left":
@@ -1050,6 +1067,7 @@ class MainWindow(QMainWindow):
         labels = {
             "default": "Layout: Default",
             "focus_files": "Layout: Focus Files",
+            "single_left": "Layout: Left Only",
             "focus_terminal": "Layout: Focus Terminal",
             "terminal_right": "Layout: Terminal Right",
             "terminal_left": "Layout: Terminal Left",
@@ -1057,12 +1075,47 @@ class MainWindow(QMainWindow):
             "review_mode": "Layout: Review Mode",
         }
         label = labels.get(preset, "Layout: Custom")
+        if preset == "single_left" and self.terminal_dock.isVisible():
+            label = "Layout: Left + Term"
         self.layout_chip.setText(label)
         self.layout_chip.setToolTip(label)
 
     def _apply_layout_mode(self, mode: str, *, persist: bool = True) -> None:
-        target_mode = mode if mode in {"terminal_left", "terminal_right"} else "stacked"
+        target_mode = (
+            mode
+            if mode in {"terminal_left", "terminal_right", "single_left"}
+            else "stacked"
+        )
         current_mode = self.context.state.layout.layout_mode
+
+        if target_mode == "single_left":
+            if current_mode in {"terminal_left", "terminal_right"}:
+                self._apply_layout_mode("stacked", persist=False)
+            if self.context.state.layout.terminal_maximized:
+                self._set_terminal_maximized(False, persist=False)
+            if self.pane_splitter is not None and current_mode != "single_left":
+                self.context.state.layout.pane_splitter_sizes = self.pane_splitter.sizes()
+            self.terminal_dock.set_side_by_side_mode(False)
+            self.terminal_dock.setVisible(False)
+            self.jobs_view.setVisible(False)
+            self.pane_views[0].setVisible(True)
+            self.pane_views[1].setVisible(False)
+            if self._ai_pane is not None:
+                self._ai_pane.setVisible(False)
+            if self.pane_splitter is not None:
+                self.pane_splitter.setSizes(
+                    [1000] + [0] * (self.pane_splitter.count() - 1)
+                )
+            self.context.state.layout.layout_mode = "single_left"
+            self._set_active_pane(0)
+            self._enter_single_left_window_size()
+            self._update_layout_chip()
+            if persist:
+                persist_app_context(self.context)
+            return
+
+        if current_mode == "single_left":
+            self._restore_window_from_single_left()
 
         if target_mode in {"terminal_left", "terminal_right"}:
             if self.context.state.layout.terminal_maximized:
@@ -1130,6 +1183,32 @@ class MainWindow(QMainWindow):
         self._update_layout_chip()
         if persist:
             persist_app_context(self.context)
+
+    def _enter_single_left_window_size(self) -> None:
+        if self._single_left_previous_geometry is None:
+            self._single_left_previous_geometry = (
+                self.normalGeometry() if self.isMaximized() else self.geometry()
+            )
+            self._single_left_previous_maximized = (
+                self.isMaximized() or self.context.state.window.is_maximized
+            )
+        if self.isMaximized():
+            self.showNormal()
+        previous = self._single_left_previous_geometry
+        self.setMinimumSize(640, 700)
+        compact_width = max(640, min(820, round(previous.width() * 0.58)))
+        self.resize(compact_width, max(700, previous.height()))
+
+    def _restore_window_from_single_left(self) -> None:
+        previous = self._single_left_previous_geometry
+        was_maximized = self._single_left_previous_maximized
+        self._single_left_previous_geometry = None
+        self._single_left_previous_maximized = False
+        self.setMinimumSize(1000, 700)
+        if previous is not None:
+            self.setGeometry(previous)
+        if was_maximized:
+            self.showMaximized()
 
     def _toggle_passive_quick_view(self) -> None:
         preview_pane = self._passive_pane()
@@ -1932,11 +2011,13 @@ class MainWindow(QMainWindow):
         if not self.terminal_dock.isVisible() and self.context.state.layout.terminal_maximized:
             self._set_terminal_maximized(False)
         self.context.config.show_terminal = self.terminal_dock.isVisible()
+        self._update_layout_chip()
         persist_app_context(self.context)
 
     def _focus_terminal(self) -> None:
         if not self.terminal_dock.isVisible():
             self.terminal_dock.setVisible(True)
+            self._update_layout_chip()
         self.terminal_dock.focus_input()
 
     def _toggle_terminal_maximized(self) -> None:
@@ -1975,14 +2056,23 @@ class MainWindow(QMainWindow):
             persist_app_context(self.context)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self.isMaximized():
+        if (
+            self.context.state.layout.layout_mode == "single_left"
+            and self._single_left_previous_geometry is not None
+        ):
+            previous = self._single_left_previous_geometry
+            self.context.state.window.width = max(1000, previous.width())
+            self.context.state.window.height = max(700, previous.height())
+            self.context.state.window.is_maximized = self._single_left_previous_maximized
+        elif self.isMaximized():
             normal = self.normalGeometry()
             self.context.state.window.width = max(1000, normal.width())
             self.context.state.window.height = max(700, normal.height())
+            self.context.state.window.is_maximized = True
         else:
             self.context.state.window.width = self.width()
             self.context.state.window.height = self.height()
-        self.context.state.window.is_maximized = self.isMaximized()
+            self.context.state.window.is_maximized = False
         if self.pane_splitter is not None:
             if self._is_side_by_side_layout():
                 self.context.state.layout.side_by_side_splitter_sizes = self.pane_splitter.sizes()

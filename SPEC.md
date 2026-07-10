@@ -360,7 +360,7 @@ Buttons are reorderable by drag. User-commands can also be bound to F-keys via c
 | Ctrl+Z                 | Undo (rename, v1 scope)                           |
 | Ctrl+Enter / Alt+Enter | Paste cursor name / full path into terminal       |
 | Ctrl+Shift+R           | Quick View — toggle Raw source                    |
-| Alt+1 … Alt+6          | Layout presets                                    |
+| Alt+1 … Alt+7          | Layout presets; Alt+7 is compact left-pane mode   |
 | Alt+Arrow              | Focus pane in that direction                      |
 
 F-keys fire globally regardless of focus; printable keys respect focus (so typing into the terminal doesn't also scroll a pane).
