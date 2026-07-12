@@ -178,8 +178,36 @@ def test_terminal_dock_shows_frontend_shell_and_backend_beside_title(
 
     dock._handle_started()
 
-    assert dock.runtime_label.text() == "xterm.js · PowerShell 7 · ConPTY"
+    assert dock.runtime_label.text() == "xterm.js · PowerShell 7"
+    assert dock.backend_status_label.text() == "● ConPTY"
     assert "[terminal]" not in dock.output.toPlainText()
+
+
+def test_terminal_dock_moves_secondary_actions_into_overflow(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+        recent_commands=["dir"],
+    )
+
+    assert [
+        action.text() for action in dock.more_menu.actions() if not action.isSeparator()
+    ] == [
+        "Clear terminal",
+        "Rerun last command",
+        "Kill current process",
+        "Use PTY backend",
+        "Restart shell",
+    ]
+    assert dock.rerun_action.isEnabled()
+    assert dock.pty_action.isCheckable()
+    assert not dock.history_button.isHidden()
 
 
 def test_terminal_history_uses_item_context_menus(monkeypatch, tmp_path: Path) -> None:

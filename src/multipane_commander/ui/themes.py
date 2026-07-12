@@ -79,15 +79,15 @@ def builtin_themes() -> list[ThemeDefinition]:
             display_name="Current (Windows Commander)",
             font_family="Segoe UI",
             font_size=10,
-            window_bg="#08111D",
-            surface_bg="#0B1324",
-            surface_border="#263754",
-            text_primary="#E7EDF8",
-            text_muted="#8CA0C3",
-            accent="#4FD1FF",
+            window_bg="#090E16",
+            surface_bg="#101722",
+            surface_border="#263140",
+            text_primary="#E8EDF5",
+            text_muted="#8F9BAD",
+            accent="#4CC9F0",
             accent_text="#F7FBFF",
-            button_bg="#16253F",
-            input_bg="#0B1324",
+            button_bg="#182230",
+            input_bg="#0C131D",
             warning="#D8A144",
             warning_text="#FFF1DE",
         ),
@@ -378,7 +378,7 @@ def build_palette(theme: ThemeDefinition) -> ThemePalette:
         splitter_hover=_rgba(accent, 0.22),
         row_even_bg=surface_bg,
         row_odd_bg=_mix(surface_bg, window_bg, 0.25),
-        row_current_bg=_mix(accent, surface_bg, 0.78),
+        row_current_bg=_mix(accent, surface_bg, 0.64),
         row_current_text=text_primary,
         row_marked_bg=_mix(accent, surface_bg, 0.88),
         row_marked_text=_lighten(text_primary, 0.02),
@@ -407,31 +407,51 @@ QFrame#terminalDock,
 QFrame#jobsView,
 QFrame#quickView,
 QFrame#functionKeyBar,
-QFrame#dialogCard,
+QFrame#dialogCard {{
+    background: {palette.panel_bg};
+    border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.42)};
+    border-radius: 10px;
+}}
 QFrame#terminalSurface,
 QFrame#terminalHistoryPanel {{
-    background: {palette.panel_bg};
-    border: 1px solid {palette.panel_border};
-    border-radius: 14px;
+    background: {palette.input_bg};
+    border: none;
+    border-radius: 8px;
 }}
 QFrame#pane[activePane="true"] {{
-    border: 2px solid {palette.active_pane_border};
+    background: {_lighten(palette.panel_bg, 0.045)};
+    border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.42)};
 }}
 QLabel#appTitle,
 QLabel#paneTitle,
 QLabel#terminalTitle {{
     color: {palette.title_text};
-    font-size: 18px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 650;
 }}
 QLabel#appSubtitle,
 QLabel#paneStatus,
 QLabel#terminalNote,
 QLabel#terminalPath,
+QLabel#terminalRuntime,
+QLabel#paneMeta,
 QLabel#jobsEmpty,
 QLabel#quickViewMeta,
 QLabel#quickViewEmpty {{
     color: {palette.text_muted};
+}}
+QLabel#paneMeta {{
+    padding: 0px 2px;
+    font-size: {max(8, font_size - 1)}pt;
+}}
+QLabel#terminalBackendStatus {{
+    color: #67D69A;
+    padding: 2px 6px;
+    font-size: {max(8, font_size - 1)}pt;
+    font-weight: 600;
+}}
+QLabel#terminalBackendStatus[available="false"] {{
+    color: {palette.bookmark_active_text};
 }}
 QLabel#jobsTitle,
 QLabel#quickViewTitle {{
@@ -517,17 +537,18 @@ QLabel#terminalActionStatus {{
 }}
 QFrame#functionKeyBar {{
     background: {_darken(palette.panel_bg, 0.16)};
-    border: 1px solid {_mix(palette.panel_border, palette.active_pane_border, 0.08)};
-    border-radius: 2px;
-    min-height: 48px;
+    border: none;
+    border-top: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.30)};
+    border-radius: 0px;
+    min-height: 40px;
 }}
 QFrame#functionKeyDivider {{
     background: {_rgba(palette.panel_border, 0.55)};
     border: none;
     min-width: 1px;
     max-width: 1px;
-    min-height: 28px;
-    max-height: 28px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 QWidget#functionKeyExtras {{
     background: transparent;
@@ -538,7 +559,7 @@ QPushButton#functionKeyButton {{
     border-radius: 1px;
     border: 1px solid transparent;
     background: transparent;
-    min-height: 34px;
+    min-height: 30px;
 }}
 QPushButton#functionKeyButton:hover,
 QPushButton#functionKeyButton:focus {{
@@ -549,16 +570,18 @@ QPushButton#functionKeyButton:pressed {{
     background: {_mix(palette.active_pane_border, palette.panel_bg, 0.72)};
 }}
 QLabel#functionKeyShortcut {{
-    background: transparent;
-    border: none;
+    background: {_mix(palette.panel_bg, palette.window_bg, 0.46)};
+    border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.28)};
+    border-radius: 4px;
     color: {palette.active_pane_border};
     font-family: Consolas;
     font-size: {max(8, font_size - 1)}pt;
     font-weight: 700;
-    padding: 0px;
+    padding: 1px 4px;
 }}
 QLabel#functionKeyShortcut[destructive="true"] {{
     color: #F27EA6;
+    border-color: {_mix("#F27EA6", palette.panel_border, 0.58)};
 }}
 QLabel#functionKeyText {{
     background: transparent;
@@ -605,13 +628,13 @@ QLabel#terminalPath {{
 }}
 QWidget#breadcrumbHost {{
     background: {palette.breadcrumb_bg};
-    border: 1px solid {palette.breadcrumb_border};
-    border-radius: 8px;
+    border: none;
+    border-radius: 7px;
     min-height: 30px;
 }}
 QWidget#tabStripHost {{
     background: transparent;
-    border-bottom: 1px solid {palette.tab_border};
+    border: none;
 }}
 QPushButton#breadcrumbButton {{
     background: transparent;
@@ -694,10 +717,16 @@ QTreeWidget {{
     background: {palette.input_bg};
     color: {palette.input_text};
     border: 1px solid {palette.input_border};
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 6px;
     selection-background-color: {palette.selection_bg};
     selection-color: {palette.selection_text};
+}}
+QTreeWidget#fileList,
+QListWidget#thumbnailList {{
+    background: {palette.input_bg};
+    border: none;
+    border-radius: 7px;
 }}
 QTextEdit#terminalOutput,
 QPlainTextEdit#terminalOutput,
@@ -779,10 +808,12 @@ QComboBox#themePicker {{
     border-radius: 10px;
 }}
 QComboBox#thumbnailSizePicker {{
-    min-width: 92px;
+    min-width: 84px;
     min-height: 24px;
-    padding: 2px 7px;
-    border-radius: 7px;
+    padding: 2px 6px;
+    border: none;
+    border-radius: 6px;
+    background: {palette.secondary_button_bg};
     font-size: {max(8, font_size - 1)}pt;
 }}
 QComboBox#quickViewSizePicker QAbstractItemView,
@@ -797,13 +828,13 @@ QHeaderView::section {{
     background: {palette.header_bg};
     color: {palette.header_text};
     border: none;
-    border-bottom: 1px solid {palette.panel_border};
-    padding: 8px 10px;
+    border-bottom: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.36)};
+    padding: 7px 10px;
     font-weight: 600;
 }}
 QTreeWidget::item {{
-    height: 32px;
-    border-bottom: 1px solid {_rgba(palette.panel_border, 0.35)};
+    height: 31px;
+    border-bottom: 1px solid {_rgba(palette.panel_border, 0.24)};
 }}
 QTreeWidget::item:hover {{
     background: {palette.tree_hover_bg};
@@ -836,10 +867,58 @@ QPushButton#secondaryActionButton {{
     min-height: 24px;
     padding: 2px 7px;
     border-radius: 7px;
-    background: {palette.secondary_button_bg};
+    background: transparent;
     color: {palette.secondary_button_text};
-    border-color: {palette.secondary_button_border};
+    border-color: transparent;
     font-size: {max(8, font_size - 1)}pt;
+}}
+QPushButton#paneToolButton,
+QPushButton#terminalToggleButton,
+QPushButton#terminalCompactButton {{
+    min-height: 26px;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: {palette.secondary_button_text};
+    font-size: {max(8, font_size - 1)}pt;
+}}
+QPushButton#paneToolButton:hover,
+QPushButton#terminalToggleButton:hover,
+QPushButton#terminalCompactButton:hover {{
+    background: {_mix(palette.active_pane_border, palette.panel_bg, 0.90)};
+    border-color: transparent;
+    color: {palette.text_primary};
+}}
+QPushButton#paneToolButton[active="true"],
+QPushButton#terminalToggleButton[active="true"] {{
+    background: {_mix(palette.active_pane_border, palette.panel_bg, 0.82)};
+    border-color: transparent;
+    color: {palette.text_primary};
+}}
+QPushButton#paneIconButton,
+QPushButton#terminalMoreButton {{
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: {palette.secondary_button_text};
+    font-size: 14px;
+    font-weight: 600;
+}}
+QPushButton#paneIconButton:hover,
+QPushButton#terminalMoreButton:hover {{
+    background: {_mix(palette.active_pane_border, palette.panel_bg, 0.90)};
+    border-color: transparent;
+    color: {palette.text_primary};
+}}
+QPushButton#terminalMoreButton::menu-indicator {{
+    image: none;
+    width: 0px;
 }}
 QPushButton#terminalHistoryActionButton {{
     min-width: 26px;
@@ -884,34 +963,33 @@ QPushButton[dialogRole="secondary"] {{
 }}
 QPushButton#tabButton,
 QPushButton#tabAddButton {{
-    min-height: 26px;
-    padding: 3px 12px;
+    min-height: 27px;
+    padding: 3px 10px;
     border-radius: 0px;
     background: transparent;
     color: {palette.tab_text};
     border: 1px solid transparent;
-    border-right-color: {palette.tab_border};
     font-size: {max(8, font_size - 1)}pt;
     font-weight: 500;
 }}
 QPushButton#tabButton[active="true"] {{
-    background: {palette.tab_active_bg};
+    background: transparent;
     color: {palette.tab_active_text};
-    border-color: {palette.tab_active_border};
-    border-bottom-color: {palette.tab_active_bg};
-    border-radius: 12px 12px 0px 0px;
+    border: none;
+    border-bottom: 2px solid {palette.active_pane_border};
+    border-radius: 0px;
     font-weight: 600;
 }}
 QPushButton#tabButton:hover {{
     background: {_rgba(palette.active_pane_border, 0.10)};
     color: {palette.tab_hover_text};
     border-color: transparent;
-    border-right-color: {palette.tab_border};
+    border-radius: 6px;
 }}
 QPushButton#tabAddButton {{
     min-width: 28px;
     padding: 3px 0px;
-    border-right-color: transparent;
+    border-color: transparent;
 }}
 QPushButton#secondaryActionButton[active="true"] {{
     background: {palette.secondary_button_active_bg};

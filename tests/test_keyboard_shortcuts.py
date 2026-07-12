@@ -539,7 +539,6 @@ def test_F1_6_type_to_jump_extends_with_subsequent_chars(tmp_path: Path) -> None
 def test_F1_6_type_to_jump_ignores_modifiers(tmp_path: Path) -> None:
     (tmp_path / "alpha.txt").write_text("a")
     pane = _make_pane(tmp_path)
-    initial = pane.file_list.currentItem()
 
     pane.keyPressEvent(
         QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, "a")
@@ -1291,10 +1290,11 @@ def test_F0_1_arrow_event_on_viewport_advances_cursor(tmp_path: Path) -> None:
     assert pane.file_list.currentItem() is not first
 
 
-def test_F0_1_cursor_row_delegate_paints_current_with_accent(tmp_path: Path) -> None:
-    """`_CursorRowDelegate` must paint the cursor row with palette.active_pane_border
-    (the accent), bypassing QSS rules on QTreeWidget::item that would otherwise
-    swallow per-item setBackground() brushes.
+def test_F0_1_cursor_row_delegate_paints_current_with_selection_color(
+    tmp_path: Path,
+) -> None:
+    """The cursor delegate uses the calmer current-row palette color while
+    still bypassing QSS rules that swallow per-item background brushes.
     """
     from PySide6.QtCore import QRect
     from PySide6.QtGui import QColor, QImage, QPainter
@@ -1318,11 +1318,12 @@ def test_F0_1_cursor_row_delegate_paints_current_with_accent(tmp_path: Path) -> 
     delegate.paint(painter, option, pane.file_list.model().index(0, 0))
     painter.end()
 
-    expected = QColor(pane.theme_palette.active_pane_border).rgb()
-    # Sample the centre of the row — it must be the accent fill.
+    expected = QColor(pane.theme_palette.row_current_bg).rgb()
+    # Sample the centre of the row — it must be the current-row fill.
     actual = image.pixel(60, 16)
     assert (actual & 0x00FFFFFF) == (expected & 0x00FFFFFF), (
-        f"cursor row not painted with accent: got {actual:#010x}, want {expected:#010x}"
+        f"cursor row not painted with selection color: got {actual:#010x}, "
+        f"want {expected:#010x}"
     )
 
 

@@ -119,6 +119,8 @@ Everything except the panes is toggleable via `View` menu.
 
 Virtualized list built on Qt's model/view stack. Must scroll smoothly at 100k rows — this is a v1 acceptance criterion and a subject of the UI spike (§16).
 
+Each pane uses one compact header row: tabs lead, view controls sit at the trailing edge, and the breadcrumb occupies its own location row. Item and selection counts live in the pane footer so they do not compete with navigation. The active pane uses a subtly brighter surface while keeping the same frame color as the inactive pane.
+
 Columns (user-configurable, per-pane): icon, name, extension, size, modified, created, attributes. Widths and order persist per-pane.
 
 Thumbnails for JPG/PNG/WebP/GIF generated on a background worker, cached to `%APPDATA%\MultiCommander\thumbs\`.
@@ -179,6 +181,7 @@ The author uses the terminal constantly, so this cannot be a neutered command li
 - **Bridge:** a local-only WebSocket server (bound to `127.0.0.1`, ephemeral port, token-auth) shuttles bytes between the xterm instance and the ConPTY. Python asyncio handles both ends.
 - **CWD sync:** default is **Follow active pane = on**. In this mode, pane changes issue a shell-specific `cd` so the terminal follows the active pane. The user can toggle Follow active pane off at any time, after which the terminal and panes diverge intentionally. v1 is one-way sync only (pane → terminal); terminal-driven cwd changes do not retarget panes.
 - **Pane-to-terminal integration:** `Ctrl+Enter` pastes the cursor item's name; `Alt+Enter` pastes the full path. Both ``Ctrl+` `` and `F9` toggle terminal visibility from anywhere; when the terminal becomes visible the focus is moved to the terminal input (so `F9` doubles as "focus terminal" once it's already open).
+- **Header hierarchy:** shell/frontend metadata and backend health are status text. History, cwd following, and expand are primary controls; Clear, Rerun, Kill, backend selection, and Restart Shell live in the overflow menu.
 
 ### 8.2 What this replaces
 

@@ -71,13 +71,14 @@ class FunctionKeyButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.setProperty("destructive", label.casefold() == "delete")
         self.setAccessibleName(f"{key} {label}")
         self.setToolTip(f"{key} {label}")
         self.clicked.connect(handler)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(1)
+        layout.setSpacing(4)
 
         self.key_label = QLabel(key)
         self.key_label.setObjectName("functionKeyShortcut")
@@ -92,10 +93,10 @@ class FunctionKeyButton(QPushButton):
         layout.addWidget(self.action_label)
 
     def sizeHint(self) -> QSize:  # type: ignore[override]
-        return QSize(self._content_width(), 34)
+        return QSize(self._content_width(), 30)
 
     def minimumSizeHint(self) -> QSize:  # type: ignore[override]
-        return QSize(self._content_width(), 34)
+        return QSize(self._content_width(), 30)
 
     def _content_width(self) -> int:
         self.ensurePolished()
@@ -119,7 +120,7 @@ def _divider() -> QFrame:
     divider = QFrame()
     divider.setObjectName("functionKeyDivider")
     divider.setFixedWidth(1)
-    divider.setFixedHeight(28)
+    divider.setFixedHeight(22)
     return divider
 
 
@@ -132,7 +133,7 @@ def build_function_key_bar(
     frame = FunctionKeyBar()
 
     layout = QHBoxLayout(frame)
-    layout.setContentsMargins(8, 7, 8, 7)
+    layout.setContentsMargins(7, 5, 7, 5)
     layout.setSpacing(0)
 
     for index, (key, label, handler) in enumerate(actions):

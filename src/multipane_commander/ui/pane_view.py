@@ -107,8 +107,13 @@ class _CursorRowDelegate(QStyledItemDelegate):
             opt = QStyleOptionViewItem(option)
             self.initStyleOption(opt, index)
             palette = self._pane.theme_palette
-            bg = QColor(palette.active_pane_border)
-            fg = QColor(palette.chip_text)
+            is_active_pane = bool(self._pane.property("activePane"))
+            bg = QColor(
+                palette.row_current_bg if is_active_pane else palette.chip_muted_bg
+            )
+            fg = QColor(
+                palette.row_current_text if is_active_pane else palette.text_muted
+            )
             painter.save()
             painter.fillRect(option.rect, bg)
             painter.restore()
@@ -196,8 +201,9 @@ class PaneView(QFrame):
         self.folder_browser_toggle = QPushButton("Folders")
         self.back_button = QPushButton("←")
         self.bookmark_toggle = QPushButton("Bookmark")
-        self.thumbnail_toggle = QPushButton("Thumbs")
+        self.thumbnail_toggle = QPushButton("Thumbnails")
         self.thumbnail_size_picker = QComboBox()
+        self.refresh_button = QPushButton("↻")
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_stack = QStackedWidget()
         self.browser_stack = QStackedWidget()
@@ -252,23 +258,12 @@ class PaneView(QFrame):
         self.set_active(active)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(7, 7, 7, 6)
         layout.setSpacing(5)
 
-        refresh_button = QPushButton("Refresh")
-        refresh_button.setObjectName("secondaryActionButton")
-        refresh_button.clicked.connect(self.refresh)
-
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
-        title_row.setSpacing(6)
-        title_row.addWidget(self.folder_browser_toggle)
-        title_row.addWidget(self.thumbnail_toggle)
-        title_row.addWidget(self.thumbnail_size_picker)
-        title_row.addStretch(1)
-        title_row.addWidget(self.summary_chip)
-        title_row.addWidget(self.selection_chip)
-        title_row.addWidget(refresh_button)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(5)
 
         self.tab_strip_host.setObjectName("tabStripHost")
         self.tab_strip_layout.setContentsMargins(0, 0, 0, 0)
@@ -276,15 +271,27 @@ class PaneView(QFrame):
         self.breadcrumb_host.setObjectName("breadcrumbHost")
         self.breadcrumb_layout.setContentsMargins(8, 3, 8, 3)
         self.breadcrumb_layout.setSpacing(2)
-        self.folder_browser_toggle.setObjectName("secondaryActionButton")
+        self.folder_browser_toggle.setObjectName("paneToolButton")
+        self.folder_browser_toggle.setCheckable(True)
+        self.folder_browser_toggle.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        )
+        self.folder_browser_toggle.setToolTip("Show or hide the folder tree")
         self.folder_browser_toggle.clicked.connect(self._toggle_folder_browser)
         self.back_button.setObjectName("breadcrumbNavButton")
         self.back_button.setToolTip("Back")
         self.back_button.clicked.connect(self._navigate_back)
         self.bookmark_toggle.setObjectName("breadcrumbBookmarkButton")
         self.bookmark_toggle.clicked.connect(self._toggle_bookmark)
-        self.thumbnail_toggle.setObjectName("secondaryActionButton")
+        self.thumbnail_toggle.setObjectName("paneToolButton")
+        self.thumbnail_toggle.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        )
         self.thumbnail_toggle.clicked.connect(self.toggle_thumbnail_mode)
+        self.refresh_button.setObjectName("paneIconButton")
+        self.refresh_button.setAccessibleName("Refresh")
+        self.refresh_button.setToolTip("Refresh (Ctrl+R)")
+        self.refresh_button.clicked.connect(self.refresh)
         self.thumbnail_size_picker.setObjectName("thumbnailSizePicker")
         self.thumbnail_size_picker.addItems(list(self._thumbnail_size_presets))
         self.thumbnail_size_picker.setCurrentText(self.pane_state.thumbnail_size_preset)
@@ -343,14 +350,21 @@ class PaneView(QFrame):
         self.thumbnail_list.installEventFilter(self)
         self.thumbnail_list.viewport().installEventFilter(self)
         self.status.setObjectName("paneStatus")
-        self.summary_chip.setObjectName("paneChip")
-        self.selection_chip.setObjectName("paneChipMuted")
+        self.summary_chip.setObjectName("paneMeta")
+        self.selection_chip.setObjectName("paneMeta")
 
-        location_row = QHBoxLayout()
-        location_row.setContentsMargins(0, 0, 0, 0)
-        location_row.setSpacing(8)
-        location_row.addWidget(self.tab_strip_host, 1)
-        location_row.addStretch(1)
+        header_row.addWidget(self.tab_strip_host, 1)
+        header_row.addWidget(self.folder_browser_toggle)
+        header_row.addWidget(self.thumbnail_toggle)
+        header_row.addWidget(self.thumbnail_size_picker)
+        header_row.addWidget(self.refresh_button)
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(3, 0, 3, 0)
+        status_row.setSpacing(10)
+        status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.summary_chip)
+        status_row.addWidget(self.selection_chip)
 
         self.content_splitter.setChildrenCollapsible(False)
         self.content_splitter.addWidget(self.folder_browser)
@@ -367,12 +381,11 @@ class PaneView(QFrame):
         self.content_stack.addWidget(self.content_splitter)
         self.content_stack.addWidget(self.quick_view)
 
-        layout.addLayout(title_row)
-        layout.addLayout(location_row)
+        layout.addLayout(header_row)
         layout.addWidget(self.breadcrumb_host)
         layout.addWidget(self._quick_filter_bar)
         layout.addWidget(self.content_stack, 1)
-        layout.addWidget(self.status)
+        layout.addLayout(status_row)
 
         self.bookmark_store.bookmarks_changed.connect(lambda _bookmarks: self._update_bookmark_button())
         self.quick_view.size_picker.currentTextChanged.connect(self._on_quick_view_size_changed)
@@ -391,6 +404,7 @@ class PaneView(QFrame):
         self.setProperty("activePane", active)
         self.style().unpolish(self)
         self.style().polish(self)
+        self._refresh_row_styles()
         self.update()
 
     def focus_list(self) -> None:
@@ -497,6 +511,17 @@ class PaneView(QFrame):
         self.pane_state.thumbnail_mode_enabled = enabled
         self.browser_stack.setCurrentWidget(self.thumbnail_list if enabled else self.file_list)
         self.thumbnail_toggle.setProperty("active", enabled)
+        self.thumbnail_toggle.setText("List" if enabled else "Thumbnails")
+        self.thumbnail_toggle.setIcon(
+            self.style().standardIcon(
+                QStyle.StandardPixmap.SP_FileDialogDetailedView
+                if enabled
+                else QStyle.StandardPixmap.SP_FileDialogListView
+            )
+        )
+        self.thumbnail_toggle.setToolTip(
+            "Switch to detailed list" if enabled else "Switch to thumbnail grid"
+        )
         self.thumbnail_size_picker.setEnabled(enabled)
         self.thumbnail_toggle.style().unpolish(self.thumbnail_toggle)
         self.thumbnail_toggle.style().polish(self.thumbnail_toggle)
@@ -1488,6 +1513,12 @@ class PaneView(QFrame):
     def _toggle_folder_browser(self) -> None:
         should_show = not self.folder_browser.isVisible()
         self.folder_browser.setVisible(should_show)
+        self.folder_browser_toggle.blockSignals(True)
+        self.folder_browser_toggle.setChecked(should_show)
+        self.folder_browser_toggle.blockSignals(False)
+        self.folder_browser_toggle.setProperty("active", should_show)
+        self.folder_browser_toggle.style().unpolish(self.folder_browser_toggle)
+        self.folder_browser_toggle.style().polish(self.folder_browser_toggle)
         if should_show:
             self.content_splitter.setSizes([260, max(640, self.width() - 260)])
             self.folder_browser.tree.setFocus(Qt.FocusReason.TabFocusReason)
@@ -1578,6 +1609,7 @@ class PaneView(QFrame):
         # so file_list.hasFocus() is False whenever the user is actually
         # interacting with the list. Treat viewport focus as list focus.
         has_focus = self.file_list.hasFocus() or self.file_list.viewport().hasFocus()
+        is_active_pane = bool(self.property("activePane"))
 
         for row in range(self.file_list.topLevelItemCount()):
             item = self.file_list.topLevelItem(row)
@@ -1597,6 +1629,9 @@ class PaneView(QFrame):
                 fg = QColor(palette.text_muted)
                 font.setItalic(True)
 
+            if is_active_pane:
+                base_bg = base_bg.lighter(106)
+
             if is_selected and is_current:
                 base_bg = QColor(
                     palette.row_marked_current_bg if has_focus else palette.row_current_bg
@@ -1608,8 +1643,12 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_marked_text)
                 font.setBold(True)
             elif is_current:
-                base_bg = QColor(palette.active_pane_border)
-                fg = QColor(palette.chip_text)
+                base_bg = QColor(
+                    palette.row_current_bg if is_active_pane else palette.chip_muted_bg
+                )
+                fg = QColor(
+                    palette.row_current_text if is_active_pane else palette.text_muted
+                )
             if is_drop_target:
                 base_bg = QColor(palette.row_drop_target_bg)
                 fg = QColor(palette.row_drop_target_text)
@@ -1644,6 +1683,9 @@ class PaneView(QFrame):
                 fg = QColor(palette.text_muted)
                 font.setItalic(True)
 
+            if is_active_pane:
+                base_bg = base_bg.lighter(106)
+
             if is_selected and is_current:
                 base_bg = QColor(
                     palette.row_marked_current_bg if thumb_has_focus else palette.row_current_bg
@@ -1655,8 +1697,12 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_marked_text)
                 font.setBold(True)
             elif is_current:
-                base_bg = QColor(palette.active_pane_border)
-                fg = QColor(palette.chip_text)
+                base_bg = QColor(
+                    palette.row_current_bg if is_active_pane else palette.chip_muted_bg
+                )
+                fg = QColor(
+                    palette.row_current_text if is_active_pane else palette.text_muted
+                )
             if is_drop_target:
                 base_bg = QColor(palette.row_drop_target_bg)
                 fg = QColor(palette.row_drop_target_text)

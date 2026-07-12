@@ -68,13 +68,11 @@ class TerminalDock(QFrame):
         self.output.command_submitted.connect(self._remember_command)
         self.output.terminal_resized.connect(self._resize_active_session)
         self.runtime_label = QLabel(self._runtime_description())
+        self.backend_status_label = QLabel()
         self.follow_button = QPushButton()
-        self.pty_button = QPushButton()
-        self.maximize_button = QPushButton("Full Screen")
+        self.maximize_button = QPushButton("Expand")
         self.history_button = QPushButton("History")
-        self.clear_button = QPushButton("Clear")
-        self.rerun_button = QPushButton("Rerun")
-        self.interrupt_button = QPushButton("Kill")
+        self.more_button = QPushButton("⋯")
         self.action_status_label = QLabel()
         self._action_status_timer = QTimer(self)
         self._action_status_timer.setSingleShot(True)
@@ -82,54 +80,57 @@ class TerminalDock(QFrame):
         self._action_status_timer.timeout.connect(self.action_status_label.hide)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(9, 8, 9, 9)
+        layout.setSpacing(6)
 
         header_top = QHBoxLayout()
-        header_top.setSpacing(8)
+        header_top.setSpacing(6)
         title = QLabel("Terminal")
         title.setObjectName("terminalTitle")
-        self.runtime_label.setObjectName("terminalPath")
+        self.runtime_label.setObjectName("terminalRuntime")
         self.runtime_label.setWordWrap(False)
         self.runtime_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.runtime_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.follow_button.setObjectName("secondaryActionButton")
+        self.backend_status_label.setObjectName("terminalBackendStatus")
+        self.follow_button.setObjectName("terminalToggleButton")
         self.follow_button.setCheckable(True)
         self.follow_button.clicked.connect(self._toggle_follow_active_pane)
-        self.pty_button.setObjectName("secondaryActionButton")
-        self.pty_button.setCheckable(True)
-        self.pty_button.clicked.connect(self._toggle_experimental_pty)
-        self.maximize_button.setObjectName("secondaryActionButton")
+        self.maximize_button.setObjectName("terminalCompactButton")
         self.maximize_button.clicked.connect(self.maximize_requested.emit)
-        self.history_button.setObjectName("secondaryActionButton")
+        self.history_button.setObjectName("terminalToggleButton")
         self.history_button.setCheckable(True)
         self.history_button.clicked.connect(self._toggle_history_panel)
-        self.clear_button.setObjectName("secondaryActionButton")
-        self.clear_button.clicked.connect(self.output.clear)
-        self.rerun_button.setObjectName("secondaryActionButton")
-        self.rerun_button.clicked.connect(self._rerun_last_command)
-        self.interrupt_button.setObjectName("secondaryActionButton")
-        self.interrupt_button.setToolTip(
-            "Force stop the current terminal process and restart the shell. Shortcut: Ctrl+Shift+K."
+        self.more_button.setObjectName("terminalMoreButton")
+        self.more_button.setToolTip("More terminal actions")
+        self.more_menu = QMenu(self)
+        self.more_menu.setObjectName("contextMenu")
+        self.clear_action = self.more_menu.addAction("Clear terminal")
+        self.clear_action.triggered.connect(lambda _checked=False: self.output.clear())
+        self.rerun_action = self.more_menu.addAction("Rerun last command")
+        self.rerun_action.triggered.connect(lambda _checked=False: self._rerun_last_command())
+        self.kill_action = self.more_menu.addAction("Kill current process")
+        self.kill_action.setToolTip("Force stop the current process and restart the shell (Ctrl+Shift+K)")
+        self.kill_action.triggered.connect(
+            lambda _checked=False: self._force_kill_current_program()
         )
-        self.interrupt_button.clicked.connect(self._force_kill_current_program)
+        self.more_menu.addSeparator()
+        self.pty_action = self.more_menu.addAction("Use PTY backend")
+        self.pty_action.setCheckable(True)
+        self.pty_action.triggered.connect(self._toggle_experimental_pty)
+        self.restart_action = self.more_menu.addAction("Restart shell")
+        self.restart_action.triggered.connect(lambda _checked=False: self.restart_shell())
+        self.more_button.setMenu(self.more_menu)
         self.action_status_label.setObjectName("terminalActionStatus")
         self.action_status_label.setVisible(False)
-        restart_button = QPushButton("Restart Shell")
-        restart_button.setObjectName("secondaryActionButton")
-        restart_button.clicked.connect(self.restart_shell)
 
         header_top.addWidget(title)
         header_top.addWidget(self.runtime_label, 1)
-        header_top.addWidget(self.history_button)
-        header_top.addWidget(self.clear_button)
-        header_top.addWidget(self.rerun_button)
-        header_top.addWidget(self.interrupt_button)
+        header_top.addWidget(self.backend_status_label)
         header_top.addWidget(self.action_status_label)
+        header_top.addWidget(self.history_button)
         header_top.addWidget(self.follow_button)
-        header_top.addWidget(self.pty_button)
         header_top.addWidget(self.maximize_button)
-        header_top.addWidget(restart_button)
+        header_top.addWidget(self.more_button)
 
         self.output.viewport().installEventFilter(self)
 
@@ -280,7 +281,7 @@ class TerminalDock(QFrame):
 
     def set_maximized(self, maximized: bool) -> None:
         self._is_maximized = maximized
-        self.maximize_button.setText("Exit Full Screen" if maximized else "Full Screen")
+        self.maximize_button.setText("Restore" if maximized else "Expand")
         self.setMinimumHeight(0 if maximized or self._side_by_side_mode else 220)
         vertical_policy = (
             QSizePolicy.Policy.Expanding
@@ -310,7 +311,12 @@ class TerminalDock(QFrame):
         self.follow_button.blockSignals(True)
         self.follow_button.setChecked(enabled)
         self.follow_button.blockSignals(False)
-        self.follow_button.setText("Follow active pane" if enabled else "Independent cwd")
+        self.follow_button.setText("Follow pane" if enabled else "Independent")
+        self.follow_button.setToolTip(
+            "Terminal follows the active file pane"
+            if enabled
+            else "Terminal keeps its own working directory"
+        )
         self.follow_button.setProperty("active", enabled)
         self.follow_button.style().unpolish(self.follow_button)
         self.follow_button.style().polish(self.follow_button)
@@ -336,12 +342,9 @@ class TerminalDock(QFrame):
 
     def set_experimental_pty(self, enabled: bool, *, emit: bool = True) -> None:
         self._experimental_pty = enabled
-        self.pty_button.blockSignals(True)
-        self.pty_button.setChecked(enabled)
-        self.pty_button.blockSignals(False)
-        self.pty_button.setProperty("active", enabled)
-        self.pty_button.style().unpolish(self.pty_button)
-        self.pty_button.style().polish(self.pty_button)
+        self.pty_action.blockSignals(True)
+        self.pty_action.setChecked(enabled)
+        self.pty_action.blockSignals(False)
         self._refresh_backend_ui()
         if emit:
             self.experimental_pty_toggled.emit(enabled)
@@ -380,6 +383,7 @@ class TerminalDock(QFrame):
 
     def _handle_started(self) -> None:
         self.runtime_label.setText(self._runtime_description())
+        self._refresh_backend_ui()
 
     def _runtime_description(self) -> str:
         frontend = (
@@ -393,13 +397,7 @@ class TerminalDock(QFrame):
             "cmd": "Command Prompt",
             "posix": "POSIX shell",
         }.get(self.session.shell_kind, self.session.shell_kind)
-        backend = {
-            "conpty": "ConPTY",
-            "winpty": "WinPTY",
-            "qprocess": "QProcess",
-            "posix-pty": "POSIX PTY",
-        }.get(self.session.backend_name, self.session.backend_name)
-        return f"{frontend} · {shell} · {backend}"
+        return f"{frontend} · {shell}"
 
     def _toggle_follow_active_pane(self, enabled: bool) -> None:
         self.set_follow_active_pane(enabled)
@@ -572,7 +570,7 @@ class TerminalDock(QFrame):
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
     def _update_rerun_button(self) -> None:
-        self.rerun_button.setEnabled(bool(self._recent_commands))
+        self.rerun_action.setEnabled(bool(self._recent_commands))
 
     def _focus_first_command_list(self) -> None:
         target = self.bookmarks_list if self.bookmarks_list.count() else self.recent_list
@@ -622,16 +620,29 @@ class TerminalDock(QFrame):
 
     def _refresh_backend_ui(self) -> None:
         backend_name = self.session.backend_name
+        backend_label = {
+            "conpty": "ConPTY",
+            "winpty": "WinPTY",
+            "qprocess": "Fallback",
+            "posix-pty": "POSIX PTY",
+        }.get(backend_name, backend_name)
         if self._experimental_pty:
             if backend_name == "qprocess":
-                self.pty_button.setText("PTY Unavailable")
-                self.pty_button.setToolTip("PTY mode was requested, but the PTY backend is unavailable. Using stable mode.")
+                self.backend_status_label.setText("● Fallback")
+                self.backend_status_label.setProperty("available", False)
+                self.backend_status_label.setToolTip(
+                    "PTY mode was requested, but the PTY backend is unavailable"
+                )
             else:
-                self.pty_button.setText("PTY Active")
-                self.pty_button.setToolTip(f"Using PTY backend: {backend_name}")
-            return
-        self.pty_button.setText("Stable Mode")
-        self.pty_button.setToolTip("Using the stable line-oriented terminal backend.")
+                self.backend_status_label.setText(f"● {backend_label}")
+                self.backend_status_label.setProperty("available", True)
+                self.backend_status_label.setToolTip(f"Active terminal backend: {backend_label}")
+        else:
+            self.backend_status_label.setText("● Stable")
+            self.backend_status_label.setProperty("available", True)
+            self.backend_status_label.setToolTip("Stable line-oriented terminal backend")
+        self.backend_status_label.style().unpolish(self.backend_status_label)
+        self.backend_status_label.style().polish(self.backend_status_label)
 
     def _looks_ready_for_input(self) -> bool:
         text = self.output.toPlainText().rstrip()
