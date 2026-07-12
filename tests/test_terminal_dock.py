@@ -5,7 +5,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QListWidget, QPushButton
 
 from multipane_commander.ui.terminal_dock import TerminalDock
 
@@ -226,8 +228,8 @@ def test_terminal_history_uses_item_context_menus(monkeypatch, tmp_path: Path) -
 
     assert dock.findChildren(QPushButton, "terminalHistoryActionButton") == []
 
-    recent_menu = dock._build_command_context_menu(dock.recent_list, "dir")
-    bookmark_menu = dock._build_command_context_menu(dock.bookmarks_list, "cls")
+    recent_menu = dock._build_command_context_menu("dir", pinned=False)
+    bookmark_menu = dock._build_command_context_menu("cls", pinned=True)
 
     assert [action.text() for action in recent_menu.actions() if not action.isSeparator()] == [
         "Use command",
@@ -239,3 +241,32 @@ def test_terminal_history_uses_item_context_menus(monkeypatch, tmp_path: Path) -
         "Run command",
         "Unpin command",
     ]
+
+
+def test_terminal_history_uses_one_headerless_list_with_pinned_commands_first(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app = _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+        recent_commands=["dir", "cls", "git status"],
+        bookmarked_commands=["cls"],
+        history_panel_visible=True,
+    )
+    app.processEvents()
+
+    assert dock.findChild(QLineEdit, "terminalHistoryFilter") is None
+    assert dock.findChildren(QLabel, "terminalHistorySection") == []
+    assert dock.findChildren(QListWidget, "terminalCommandList") == [dock.command_list]
+    assert [dock.command_list.item(row).text() for row in range(dock.command_list.count())] == [
+        "cls",
+        "dir",
+        "git status",
+    ]
+    assert dock.command_list.item(0).data(Qt.ItemDataRole.UserRole) is True
+    assert dock.command_list.item(1).data(Qt.ItemDataRole.UserRole) is False
+    assert dock.command_list.property("pinnedTextColor") == QColor("#D8A144")

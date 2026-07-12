@@ -481,13 +481,9 @@ QLabel#dialogPreviewSample {{
     font-weight: 600;
     padding: 4px 0px;
 }}
-QLabel#terminalHistoryTitle,
-QLabel#terminalHistorySection {{
-    color: {palette.title_text};
-    font-weight: 700;
-}}
-QLabel#terminalHistorySection {{
-    font-size: 13px;
+QLabel#terminalHistoryTitle {{
+    color: {palette.text_muted};
+    font-weight: 600;
 }}
 QLabel#paneChip,
 QLabel#paneChipMuted,
@@ -769,27 +765,29 @@ QPlainTextEdit#terminalOutput QScrollBar::sub-page:vertical {{
     border: none;
     height: 0px;
 }}
-QLineEdit#terminalHistoryFilter {{
-    min-height: 30px;
-}}
 QListWidget#terminalCommandList {{
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 2px;
+    font-family: Consolas;
     min-height: 120px;
-    padding: 6px;
+    qproperty-pinnedTextColor: {palette.bookmark_active_text};
 }}
 QListWidget#terminalCommandList::item {{
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 3px 8px;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 0px;
+    padding: 3px 7px;
     margin: 0px;
     min-height: 22px;
 }}
 QListWidget#terminalCommandList::item:hover {{
     background: {palette.thumbnail_hover_bg};
-    border-color: {palette.button_hover_border};
 }}
 QListWidget#terminalCommandList::item:selected {{
     background: {palette.tree_selected_bg};
-    border-color: {palette.button_hover_border};
+    border-left-color: {palette.active_pane_border};
     color: {palette.text_primary};
 }}
 QPlainTextEdit#quickViewText {{

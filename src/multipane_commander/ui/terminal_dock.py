@@ -3,26 +3,73 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence
+from PySide6.QtCore import Property, QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
 )
 
 from multipane_commander.terminal.session import TerminalSession
 from multipane_commander.ui.xterm_surface import WEB_TERMINAL_AVAILABLE, create_terminal_surface
+
+
+_PINNED_COMMAND_ROLE = Qt.ItemDataRole.UserRole
+
+
+class _CommandHistoryList(QListWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self._pinned_text_color = QColor("#D8A144")
+
+    def _get_pinned_text_color(self) -> QColor:
+        return self._pinned_text_color
+
+    def _set_pinned_text_color(self, color: QColor) -> None:
+        self._pinned_text_color = QColor(color)
+        self.viewport().update()
+
+    pinnedTextColor = Property(
+        QColor,
+        _get_pinned_text_color,
+        _set_pinned_text_color,
+    )
+
+
+class _CommandHistoryDelegate(QStyledItemDelegate):
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:  # type: ignore[override]
+        pinned = bool(index.data(_PINNED_COMMAND_ROLE))
+        paint_option = QStyleOptionViewItem(option)
+        if pinned:
+            accent = option.palette.highlight().color()
+            tint = QColor(accent)
+            tint.setAlpha(24)
+            painter.fillRect(option.rect, tint)
+            history_list = self.parent()
+            if isinstance(history_list, _CommandHistoryList):
+                pinned_text = history_list._get_pinned_text_color()
+                paint_option.palette.setColor(QPalette.ColorRole.Text, pinned_text)
+                paint_option.palette.setColor(
+                    QPalette.ColorRole.HighlightedText,
+                    pinned_text,
+                )
+
+        super().paint(painter, paint_option, index)
+
+        if pinned:
+            painter.fillRect(option.rect.x(), option.rect.y(), 2, option.rect.height(), accent)
 
 
 class TerminalDock(QFrame):
@@ -141,57 +188,24 @@ class TerminalDock(QFrame):
         terminal_surface_layout.setSpacing(0)
         terminal_surface_layout.addWidget(self.output, 1)
 
-        self.command_filter = QLineEdit()
-        self.command_filter.setObjectName("terminalHistoryFilter")
-        self.command_filter.setPlaceholderText("Filter command history")
-        self.command_filter.textChanged.connect(self._refresh_command_lists)
-        self.command_filter.installEventFilter(self)
-
-        self.bookmarks_list = QListWidget()
-        self.bookmarks_list.setObjectName("terminalCommandList")
-        self.bookmarks_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.bookmarks_list.setSpacing(1)
-        self.bookmarks_list.setUniformItemSizes(True)
-        self.bookmarks_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.bookmarks_list.customContextMenuRequested.connect(
-            lambda position: self._show_command_context_menu(self.bookmarks_list, position)
-        )
-        self.bookmarks_list.installEventFilter(self)
-        self.recent_list = QListWidget()
-        self.recent_list.setObjectName("terminalCommandList")
-        self.recent_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.recent_list.setSpacing(1)
-        self.recent_list.setUniformItemSizes(True)
-        self.recent_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.recent_list.customContextMenuRequested.connect(
-            lambda position: self._show_command_context_menu(self.recent_list, position)
-        )
-        self.recent_list.installEventFilter(self)
-        self.bookmarks_list.itemDoubleClicked.connect(self._run_clicked_command)
-        self.recent_list.itemDoubleClicked.connect(self._run_clicked_command)
-        self.bookmarks_list.currentItemChanged.connect(
-            lambda current, _previous: self._clear_other_command_selection(self.recent_list, current)
-        )
-        self.recent_list.currentItemChanged.connect(
-            lambda current, _previous: self._clear_other_command_selection(self.bookmarks_list, current)
-        )
+        self.command_list = _CommandHistoryList()
+        self.command_list.setObjectName("terminalCommandList")
+        self.command_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.command_list.setSpacing(1)
+        self.command_list.setUniformItemSizes(True)
+        self.command_list.setItemDelegate(_CommandHistoryDelegate(self.command_list))
+        self.command_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.command_list.customContextMenuRequested.connect(self._show_command_context_menu)
+        self.command_list.installEventFilter(self)
+        self.command_list.itemDoubleClicked.connect(self._run_clicked_command)
 
         history_panel = QFrame()
         history_panel.setObjectName("terminalHistoryPanel")
         history_panel.setMinimumWidth(260)
         history_layout = QVBoxLayout(history_panel)
-        history_layout.setContentsMargins(10, 10, 10, 10)
-        history_layout.setSpacing(6)
-        bookmarks_title = QLabel("Pinned")
-        bookmarks_title.setObjectName("terminalHistorySection")
-        recent_title = QLabel("Recent")
-        recent_title.setObjectName("terminalHistorySection")
-
-        history_layout.addWidget(self.command_filter)
-        history_layout.addWidget(bookmarks_title)
-        history_layout.addWidget(self.bookmarks_list, 1)
-        history_layout.addWidget(recent_title)
-        history_layout.addWidget(self.recent_list, 1)
+        history_layout.setContentsMargins(5, 5, 5, 5)
+        history_layout.setSpacing(0)
+        history_layout.addWidget(self.command_list, 1)
         self.history_panel = history_panel
 
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -215,9 +229,7 @@ class TerminalDock(QFrame):
             self._ensure_session_started()
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
-        command_filter = getattr(self, "command_filter", None)
-        bookmarks_list = getattr(self, "bookmarks_list", None)
-        recent_list = getattr(self, "recent_list", None)
+        command_list = getattr(self, "command_list", None)
 
         if watched is self.output.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
@@ -233,23 +245,16 @@ class TerminalDock(QFrame):
                     self.focus_input()
                 self._output_press_pos = None
                 self._output_dragged = False
-        elif watched is command_filter and event.type() == QEvent.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Down and not event.modifiers():
-                self._focus_first_command_list()
-                return True
-            if event.key() == Qt.Key.Key_Escape and not event.modifiers():
-                self.focus_input()
-                return True
-        elif watched in {bookmarks_list, recent_list} and event.type() == QEvent.Type.KeyPress:
+        elif watched is command_list and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.modifiers():
                 self._run_selected_command()
                 return True
-            if event.key() == Qt.Key.Key_Delete and watched is bookmarks_list and not event.modifiers():
+            if (
+                event.key() == Qt.Key.Key_Delete
+                and not event.modifiers()
+                and self._selected_command_is_pinned()
+            ):
                 self._remove_selected_bookmark()
-                return True
-            if event.matches(QKeySequence.StandardKey.Find):
-                self.command_filter.setFocus(Qt.FocusReason.ShortcutFocusReason)
-                self.command_filter.selectAll()
                 return True
             if event.key() == Qt.Key.Key_Escape and not event.modifiers():
                 self.focus_input()
@@ -461,52 +466,56 @@ class TerminalDock(QFrame):
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
     def _refresh_command_lists(self) -> None:
-        filter_text = self.command_filter.text().strip().lower()
-        self._fill_command_list(self.bookmarks_list, self._bookmarked_commands, filter_text)
-        self._fill_command_list(self.recent_list, self._recent_commands, filter_text)
-
-    def _fill_command_list(self, widget: QListWidget, commands: list[str], filter_text: str) -> None:
-        widget.clear()
-        for command in commands:
-            if filter_text and filter_text not in command.lower():
-                continue
+        self.command_list.clear()
+        pinned_keys = {
+            self._command_key(command) for command in self._bookmarked_commands
+        }
+        ordered_commands = [
+            (command, True) for command in self._bookmarked_commands
+        ] + [
+            (command, False)
+            for command in self._recent_commands
+            if self._command_key(command) not in pinned_keys
+        ]
+        for command, pinned in ordered_commands:
             item = QListWidgetItem(command)
             item.setSizeHint(QSize(0, 24))
-            widget.addItem(item)
+            item.setData(_PINNED_COMMAND_ROLE, pinned)
+            item.setToolTip(command)
+            self.command_list.addItem(item)
 
     def _selected_command(self) -> str | None:
-        if self.bookmarks_list.hasFocus():
-            current_bookmark = self.bookmarks_list.currentItem()
-            if current_bookmark is not None:
-                return current_bookmark.text()
-        if self.recent_list.hasFocus():
-            current_recent = self.recent_list.currentItem()
-            if current_recent is not None:
-                return current_recent.text()
-        current_bookmark = self.bookmarks_list.currentItem()
-        current_recent = self.recent_list.currentItem()
-        if current_bookmark is not None and current_recent is None:
-            return current_bookmark.text()
-        if current_recent is not None and current_bookmark is None:
-            return current_recent.text()
+        current_item = self.command_list.currentItem()
+        if current_item is not None:
+            return current_item.text()
         text = self.output.current_draft().strip()
         return text or None
+
+    def _selected_command_is_pinned(self) -> bool:
+        current_item = self.command_list.currentItem()
+        return bool(
+            current_item is not None
+            and current_item.data(_PINNED_COMMAND_ROLE)
+        )
 
     def _run_clicked_command(self, item: QListWidgetItem) -> None:
         self._run_command(item.text())
 
-    def _show_command_context_menu(self, widget: QListWidget, position: QPoint) -> None:
-        item = widget.itemAt(position)
+    def _show_command_context_menu(self, position: QPoint) -> None:
+        item = self.command_list.itemAt(position)
         if item is None:
             return
 
-        widget.setCurrentItem(item)
-        widget.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.command_list.setCurrentItem(item)
+        self.command_list.setFocus(Qt.FocusReason.MouseFocusReason)
         command = item.text()
-        menu = self._build_command_context_menu(widget, command)
-        menu.exec(widget.viewport().mapToGlobal(position))
+        menu = self._build_command_context_menu(
+            command,
+            pinned=bool(item.data(_PINNED_COMMAND_ROLE)),
+        )
+        menu.exec(self.command_list.viewport().mapToGlobal(position))
 
-    def _build_command_context_menu(self, widget: QListWidget, command: str) -> QMenu:
+    def _build_command_context_menu(self, command: str, *, pinned: bool) -> QMenu:
         menu = QMenu(self)
         use_action = menu.addAction("Use command")
         use_action.triggered.connect(lambda _checked=False, value=command: self._use_command(value))
@@ -514,7 +523,7 @@ class TerminalDock(QFrame):
         run_action.triggered.connect(lambda _checked=False, value=command: self._run_command(value))
         menu.addSeparator()
 
-        if widget is self.bookmarks_list:
+        if pinned:
             unpin_action = menu.addAction("Unpin command")
             unpin_action.triggered.connect(lambda _checked=False, value=command: self._remove_bookmark(value))
         else:
@@ -557,8 +566,8 @@ class TerminalDock(QFrame):
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
     def _remove_selected_bookmark(self) -> None:
-        current_item = self.bookmarks_list.currentItem()
-        if current_item is None:
+        current_item = self.command_list.currentItem()
+        if current_item is None or not current_item.data(_PINNED_COMMAND_ROLE):
             return
         self._remove_bookmark(current_item.text())
 
@@ -573,11 +582,10 @@ class TerminalDock(QFrame):
         self.rerun_action.setEnabled(bool(self._recent_commands))
 
     def _focus_first_command_list(self) -> None:
-        target = self.bookmarks_list if self.bookmarks_list.count() else self.recent_list
-        if target.count() == 0:
+        if self.command_list.count() == 0:
             return
-        target.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        target.setCurrentRow(0)
+        self.command_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.command_list.setCurrentRow(0)
 
     def _unique_commands(self, commands: list[str]) -> list[str]:
         unique: list[str] = []
@@ -593,12 +601,6 @@ class TerminalDock(QFrame):
 
     def _command_key(self, command: str) -> str:
         return command.strip()
-
-    def _clear_other_command_selection(self, other_list: QListWidget, current_item) -> None:
-        if current_item is None:
-            return
-        other_list.clearSelection()
-        other_list.setCurrentRow(-1)
 
     def _build_session(self, initial_directory: Path) -> TerminalSession:
         return TerminalSession(initial_directory=initial_directory, experimental_pty=self._experimental_pty)
