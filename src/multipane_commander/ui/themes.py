@@ -176,19 +176,84 @@ def builtin_themes() -> list[ThemeDefinition]:
             warning="#E6C15A",
             warning_text="#251D08",
         ),
+        ThemeDefinition(
+            id="graphite-board",
+            display_name="Graphite Board",
+            font_family="Cascadia Mono",
+            font_size=10,
+            window_bg="#252626",
+            surface_bg="#303232",
+            surface_border="#626665",
+            text_primary="#E7E4DE",
+            text_muted="#A5A7A2",
+            accent="#D2B39C",
+            accent_text="#252321",
+            button_bg="#3B3D3D",
+            input_bg="#292B2B",
+            warning="#C96F79",
+            warning_text="#FFF0F1",
+        ),
+        ThemeDefinition(
+            id="editorial-light",
+            display_name="Editorial Light",
+            font_family="Segoe UI Variable Text",
+            font_size=10,
+            window_bg="#F7F7F5",
+            surface_bg="#FFFFFF",
+            surface_border="#DEDEDA",
+            text_primary="#111111",
+            text_muted="#77736C",
+            accent="#5B8DEF",
+            accent_text="#111827",
+            button_bg="#F0F0EE",
+            input_bg="#F6F6F4",
+            warning="#B76E3A",
+            warning_text="#3A2417",
+        ),
+        ThemeDefinition(
+            id="frosted-planner",
+            display_name="Frosted Planner",
+            font_family="Segoe UI Variable Text",
+            font_size=11,
+            window_bg="#DCE9EF",
+            surface_bg="#EDF5F7",
+            surface_border="#C4D5DC",
+            text_primary="#1C2938",
+            text_muted="#667986",
+            accent="#6C8296",
+            accent_text="#142033",
+            button_bg="#E1ECF0",
+            input_bg="#F5FAFB",
+            warning="#B57A38",
+            warning_text="#3D2B18",
+        ),
     ]
 
 
-def available_themes(custom_themes: list[ThemeDefinition]) -> list[ThemeDefinition]:
-    theme_map: dict[str, ThemeDefinition] = {theme.id: theme for theme in builtin_themes()}
+def available_themes(
+    custom_themes: list[ThemeDefinition],
+    deleted_builtin_theme_ids: list[str] | None = None,
+) -> list[ThemeDefinition]:
+    deleted_ids = set(deleted_builtin_theme_ids or [])
+    builtins = builtin_themes()
+    theme_map: dict[str, ThemeDefinition] = {
+        theme.id: theme for theme in builtins if theme.id not in deleted_ids
+    }
     for theme in custom_themes:
         theme_map[theme.id] = theme
+    if not theme_map:
+        theme_map[builtins[0].id] = builtins[0]
     return list(theme_map.values())
 
 
-def resolve_theme_definition(selected_theme_id: str, custom_themes: list[ThemeDefinition]) -> ThemeDefinition:
-    theme_map = {theme.id: theme for theme in available_themes(custom_themes)}
-    return theme_map.get(selected_theme_id) or builtin_themes()[0]
+def resolve_theme_definition(
+    selected_theme_id: str,
+    custom_themes: list[ThemeDefinition],
+    deleted_builtin_theme_ids: list[str] | None = None,
+) -> ThemeDefinition:
+    themes = available_themes(custom_themes, deleted_builtin_theme_ids)
+    theme_map = {theme.id: theme for theme in themes}
+    return theme_map.get(selected_theme_id) or themes[0]
 
 
 @dataclass(slots=True)
@@ -444,13 +509,7 @@ QLabel#paneMeta {{
     padding: 0px 2px;
     font-size: {max(8, font_size - 1)}pt;
 }}
-QLabel#terminalBackendStatus {{
-    color: #67D69A;
-    padding: 2px 6px;
-    font-size: {max(8, font_size - 1)}pt;
-    font-weight: 600;
-}}
-QLabel#terminalBackendStatus[available="false"] {{
+QLabel#terminalRuntime[backendAvailable="false"] {{
     color: {palette.bookmark_active_text};
 }}
 QLabel#jobsTitle,
@@ -958,6 +1017,14 @@ QPushButton[dialogRole="secondary"] {{
     background: {palette.secondary_button_bg};
     color: {palette.secondary_button_text};
     border-color: {palette.secondary_button_border};
+}}
+QPushButton[dialogRole="secondary"][destructive="true"] {{
+    color: #F27EA6;
+}}
+QPushButton[dialogRole="secondary"][destructive="true"]:hover {{
+    background: {_mix("#F27EA6", palette.panel_bg, 0.88)};
+    border-color: {_mix("#F27EA6", palette.panel_border, 0.48)};
+    color: {palette.text_primary};
 }}
 QPushButton#tabButton,
 QPushButton#tabAddButton {{

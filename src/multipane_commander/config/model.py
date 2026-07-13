@@ -26,6 +26,7 @@ class ThemeDefinition:
 class ThemeConfig:
     selected_theme_id: str = "windows-commander"
     custom_themes: list[ThemeDefinition] = field(default_factory=list)
+    deleted_builtin_theme_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

@@ -115,7 +115,6 @@ class TerminalDock(QFrame):
         self.output.command_submitted.connect(self._remember_command)
         self.output.terminal_resized.connect(self._resize_active_session)
         self.runtime_label = QLabel(self._runtime_description())
-        self.backend_status_label = QLabel()
         self.follow_button = QPushButton()
         self.maximize_button = QPushButton("Expand")
         self.history_button = QPushButton("History")
@@ -138,7 +137,6 @@ class TerminalDock(QFrame):
         self.runtime_label.setWordWrap(False)
         self.runtime_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.runtime_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.backend_status_label.setObjectName("terminalBackendStatus")
         self.follow_button.setObjectName("terminalToggleButton")
         self.follow_button.setCheckable(True)
         self.follow_button.clicked.connect(self._toggle_follow_active_pane)
@@ -172,7 +170,6 @@ class TerminalDock(QFrame):
 
         header_top.addWidget(title)
         header_top.addWidget(self.runtime_label, 1)
-        header_top.addWidget(self.backend_status_label)
         header_top.addWidget(self.action_status_label)
         header_top.addWidget(self.history_button)
         header_top.addWidget(self.follow_button)
@@ -387,7 +384,6 @@ class TerminalDock(QFrame):
             self._pty_ready_timer.start()
 
     def _handle_started(self) -> None:
-        self.runtime_label.setText(self._runtime_description())
         self._refresh_backend_ui()
 
     def _runtime_description(self) -> str:
@@ -402,7 +398,26 @@ class TerminalDock(QFrame):
             "cmd": "Command Prompt",
             "posix": "POSIX shell",
         }.get(self.session.shell_kind, self.session.shell_kind)
-        return f"{frontend} · {shell}"
+        backend_label, _available, _tooltip = self._backend_description()
+        return f"{frontend} · {shell} · {backend_label}"
+
+    def _backend_description(self) -> tuple[str, bool, str]:
+        backend_name = self.session.backend_name
+        backend_label = {
+            "conpty": "ConPTY",
+            "winpty": "WinPTY",
+            "qprocess": "Fallback",
+            "posix-pty": "POSIX PTY",
+        }.get(backend_name, backend_name)
+        if not self._experimental_pty:
+            return "Stable", True, "Stable line-oriented terminal backend"
+        if backend_name == "qprocess":
+            return (
+                "Fallback",
+                False,
+                "PTY mode was requested, but the PTY backend is unavailable",
+            )
+        return backend_label, True, f"Active terminal backend: {backend_label}"
 
     def _toggle_follow_active_pane(self, enabled: bool) -> None:
         self.set_follow_active_pane(enabled)
@@ -621,30 +636,12 @@ class TerminalDock(QFrame):
         self.session.resize(cols, rows)
 
     def _refresh_backend_ui(self) -> None:
-        backend_name = self.session.backend_name
-        backend_label = {
-            "conpty": "ConPTY",
-            "winpty": "WinPTY",
-            "qprocess": "Fallback",
-            "posix-pty": "POSIX PTY",
-        }.get(backend_name, backend_name)
-        if self._experimental_pty:
-            if backend_name == "qprocess":
-                self.backend_status_label.setText("● Fallback")
-                self.backend_status_label.setProperty("available", False)
-                self.backend_status_label.setToolTip(
-                    "PTY mode was requested, but the PTY backend is unavailable"
-                )
-            else:
-                self.backend_status_label.setText(f"● {backend_label}")
-                self.backend_status_label.setProperty("available", True)
-                self.backend_status_label.setToolTip(f"Active terminal backend: {backend_label}")
-        else:
-            self.backend_status_label.setText("● Stable")
-            self.backend_status_label.setProperty("available", True)
-            self.backend_status_label.setToolTip("Stable line-oriented terminal backend")
-        self.backend_status_label.style().unpolish(self.backend_status_label)
-        self.backend_status_label.style().polish(self.backend_status_label)
+        _backend_label, available, tooltip = self._backend_description()
+        self.runtime_label.setText(self._runtime_description())
+        self.runtime_label.setProperty("backendAvailable", available)
+        self.runtime_label.setToolTip(tooltip)
+        self.runtime_label.style().unpolish(self.runtime_label)
+        self.runtime_label.style().polish(self.runtime_label)
 
     def _looks_ready_for_input(self) -> bool:
         text = self.output.toPlainText().rstrip()

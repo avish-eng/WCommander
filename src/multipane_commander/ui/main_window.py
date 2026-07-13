@@ -280,6 +280,7 @@ class MainWindow(QMainWindow):
                     resolve_theme_definition(
                         self.context.config.theme.selected_theme_id,
                         self.context.config.theme.custom_themes,
+                        self.context.config.theme.deleted_builtin_theme_ids,
                     )
                 )
             )
@@ -458,6 +459,7 @@ class MainWindow(QMainWindow):
         theme = resolve_theme_definition(
             self.context.config.theme.selected_theme_id,
             self.context.config.theme.custom_themes,
+            self.context.config.theme.deleted_builtin_theme_ids,
         )
         self._apply_theme_definition(theme)
 
@@ -473,15 +475,24 @@ class MainWindow(QMainWindow):
         current_theme = resolve_theme_definition(
             selected_theme_id,
             self.context.config.theme.custom_themes,
+            self.context.config.theme.deleted_builtin_theme_ids,
         )
+        selectable_themes = available_themes(
+            self.context.config.theme.custom_themes,
+            self.context.config.theme.deleted_builtin_theme_ids,
+        )
+        if selected_theme_id not in {theme.id for theme in selectable_themes}:
+            selected_theme_id = current_theme.id
         builtin_ids = {theme.id for theme in builtin_themes()}
         dialog = ThemeEditorDialog(
             parent=self,
             initial_theme=current_theme,
-            available_themes=available_themes(self.context.config.theme.custom_themes),
+            available_themes=selectable_themes,
             selected_theme_id=selected_theme_id,
         )
         dialog.preview_requested.connect(self._preview_theme_edit)
+        dialog.default_theme_requested.connect(self._set_default_theme)
+        dialog.delete_theme_requested.connect(self._delete_theme)
         if dialog.exec() != ThemeEditorDialog.DialogCode.Accepted:
             self._apply_selected_theme()
             return
@@ -527,6 +538,52 @@ class MainWindow(QMainWindow):
         ]
         self.context.config.theme.custom_themes.append(edited_theme)
         self.context.config.theme.selected_theme_id = edited_theme.id
+        self._apply_selected_theme()
+        persist_app_context(self.context)
+
+    def _set_default_theme(self, theme_id: str) -> None:
+        theme_ids = {
+            theme.id
+            for theme in available_themes(
+                self.context.config.theme.custom_themes,
+                self.context.config.theme.deleted_builtin_theme_ids,
+            )
+        }
+        if theme_id not in theme_ids:
+            return
+        self.context.config.theme.selected_theme_id = theme_id
+        self._apply_selected_theme()
+        persist_app_context(self.context)
+
+    def _delete_theme(self, theme_id: str) -> None:
+        selectable_themes = available_themes(
+            self.context.config.theme.custom_themes,
+            self.context.config.theme.deleted_builtin_theme_ids,
+        )
+        if len(selectable_themes) <= 1 or theme_id not in {
+            theme.id for theme in selectable_themes
+        }:
+            return
+        builtin_ids = {theme.id for theme in builtin_themes()}
+        custom_ids = {theme.id for theme in self.context.config.theme.custom_themes}
+        remaining_custom_themes = [
+            theme for theme in self.context.config.theme.custom_themes if theme.id != theme_id
+        ]
+        if theme_id in custom_ids:
+            self.context.config.theme.custom_themes = remaining_custom_themes
+        elif theme_id in builtin_ids:
+            deleted_ids = set(self.context.config.theme.deleted_builtin_theme_ids)
+            deleted_ids.add(theme_id)
+            self.context.config.theme.deleted_builtin_theme_ids = sorted(deleted_ids)
+        else:
+            return
+        remaining_themes = available_themes(
+            self.context.config.theme.custom_themes,
+            self.context.config.theme.deleted_builtin_theme_ids,
+        )
+        remaining_ids = {theme.id for theme in remaining_themes}
+        if self.context.config.theme.selected_theme_id not in remaining_ids:
+            self.context.config.theme.selected_theme_id = remaining_themes[0].id
         self._apply_selected_theme()
         persist_app_context(self.context)
 

@@ -11,6 +11,7 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
     config = AppConfig(
         theme=ThemeConfig(
             selected_theme_id="ocean-night",
+            deleted_builtin_theme_ids=["mac-graphite"],
             custom_themes=[
                 ThemeDefinition(
                     id="ocean-night",
@@ -50,6 +51,7 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
     loaded = load_config()
 
     assert loaded.theme.selected_theme_id == "ocean-night"
+    assert loaded.theme.deleted_builtin_theme_ids == ["mac-graphite"]
     assert len(loaded.theme.custom_themes) == 1
     assert loaded.theme.custom_themes[0].display_name == "Ocean Night"
     assert loaded.theme.custom_themes[0].font_family == "Cascadia Mono"
@@ -108,3 +110,24 @@ def test_config_store_handles_malformed_values(tmp_path, monkeypatch) -> None:
     assert loaded.env_path.original_entries == [""]
     assert loaded.follow_active_pane_terminal is False
     assert loaded.show_terminal is True
+
+
+def test_config_store_migrates_hidden_builtin_theme_ids(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_path = tmp_path / "MultiPaneCommander" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "theme": {
+                    "selected_theme_id": "windows-commander",
+                    "hidden_builtin_theme_ids": ["solarized-dark"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config()
+
+    assert loaded.theme.deleted_builtin_theme_ids == ["solarized-dark"]

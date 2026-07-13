@@ -97,6 +97,14 @@ def load_config() -> AppConfig:
         theme=ThemeConfig(
             selected_theme_id=legacy_theme_name,
             custom_themes=custom_themes,
+            deleted_builtin_theme_ids=_string_list(
+                theme_payload.get(
+                    "deleted_builtin_theme_ids",
+                    theme_payload.get("hidden_builtin_theme_ids", []),
+                )
+                if isinstance(theme_payload, dict)
+                else []
+            ),
         ),
         terminal=TerminalConfig(
             recent_commands=_string_list(terminal_payload.get("recent_commands", [])),
@@ -171,6 +179,7 @@ def save_config(config: AppConfig) -> None:
         "theme": {
             "selected_theme_id": config.theme.selected_theme_id,
             "custom_themes": [asdict(theme) for theme in config.theme.custom_themes],
+            "deleted_builtin_theme_ids": config.theme.deleted_builtin_theme_ids,
         },
         "terminal": {
             "recent_commands": config.terminal.recent_commands,

@@ -20,12 +20,16 @@ from PySide6.QtWidgets import (
 )
 
 from multipane_commander.config.model import ThemeDefinition
+from multipane_commander.services.theme_backups import backup_theme_definition, theme_backup_dir
 from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
+from multipane_commander.ui.dialogs import ask_confirmation, show_message
 from multipane_commander.ui.themes import slugify_theme_name
 
 
 class ThemeEditorDialog(QDialog):
     preview_requested = Signal(object)
+    default_theme_requested = Signal(str)
+    delete_theme_requested = Signal(str)
 
     def __init__(
         self,
@@ -43,6 +47,7 @@ class ThemeEditorDialog(QDialog):
         self._initial_theme = initial_theme
         self._initial_theme_id = selected_theme_id
         self._available_theme_map = {theme.id: theme for theme in available_themes}
+        self._default_theme_id = selected_theme_id
         self._current_source_theme_id = selected_theme_id
         self._is_loading_theme = False
         self._fields: dict[str, QLineEdit] = {}
@@ -75,7 +80,22 @@ class ThemeEditorDialog(QDialog):
         selected_index = self.theme_choice.findData(selected_theme_id)
         if selected_index >= 0:
             self.theme_choice.setCurrentIndex(selected_index)
-        form.addRow("Theme", self.theme_choice)
+
+        theme_controls = QWidget()
+        theme_controls_layout = QHBoxLayout(theme_controls)
+        theme_controls_layout.setContentsMargins(0, 0, 0, 0)
+        theme_controls_layout.setSpacing(8)
+        self.make_default_button = QPushButton("Make Default")
+        self.make_default_button.setProperty("dialogRole", "secondary")
+        self.make_default_button.clicked.connect(self._make_selected_theme_default)
+        self.delete_theme_button = QPushButton("Delete Theme")
+        self.delete_theme_button.setProperty("dialogRole", "secondary")
+        self.delete_theme_button.setProperty("destructive", True)
+        self.delete_theme_button.clicked.connect(self._delete_selected_theme)
+        theme_controls_layout.addWidget(self.theme_choice, 1)
+        theme_controls_layout.addWidget(self.make_default_button)
+        theme_controls_layout.addWidget(self.delete_theme_button)
+        form.addRow("Theme", theme_controls)
 
         self.name_input = QLineEdit(initial_theme.display_name)
         form.addRow("Theme name", self.name_input)
@@ -204,6 +224,7 @@ class ThemeEditorDialog(QDialog):
         self.name_input.selectAll()
         self.name_input.setFocus()
         self._wire_live_preview()
+        self._update_theme_management_buttons()
         self._refresh_preview_sample()
         install_dialog_key_bindings(self, accept=save_button.click)
 
@@ -246,6 +267,77 @@ class ThemeEditorDialog(QDialog):
             return
         self._current_source_theme_id = theme_id
         self._load_theme(theme)
+        self._update_theme_management_buttons()
+
+    def _update_theme_management_buttons(self) -> None:
+        theme_id = self.theme_choice.currentData()
+        is_theme = isinstance(theme_id, str) and theme_id in self._available_theme_map
+        is_default = is_theme and theme_id == self._default_theme_id
+        can_delete = is_theme and self.theme_choice.count() > 1
+        self.make_default_button.setEnabled(bool(is_theme and not is_default))
+        self.make_default_button.setText("Default" if is_default else "Make Default")
+        self.delete_theme_button.setEnabled(bool(can_delete))
+        self.delete_theme_button.setToolTip(
+            "Delete this theme"
+            if can_delete
+            else "At least one theme must remain"
+        )
+
+    def _make_selected_theme_default(self) -> None:
+        theme_id = self.theme_choice.currentData()
+        if not isinstance(theme_id, str) or theme_id not in self._available_theme_map:
+            return
+        self._default_theme_id = theme_id
+        self.default_theme_requested.emit(theme_id)
+        self._update_theme_management_buttons()
+
+    def _delete_selected_theme(self) -> None:
+        theme_id = self.theme_choice.currentData()
+        if not isinstance(theme_id, str) or self.theme_choice.count() <= 1:
+            return
+        theme = self._available_theme_map.get(theme_id)
+        if theme is None:
+            return
+        if not ask_confirmation(
+            parent=self,
+            title="Delete theme?",
+            message=(
+                f'Delete "{theme.display_name}" from the theme list? '
+                f'A backup will be saved in "{theme_backup_dir()}".'
+            ),
+            accept_label="Delete Theme",
+            is_destructive=True,
+        ):
+            return
+
+        try:
+            backup_theme_definition(theme)
+        except OSError as error:
+            show_message(
+                parent=self,
+                title="Theme backup failed",
+                message="The theme was not deleted because its backup could not be saved.",
+                details=str(error),
+                level="error",
+            )
+            return
+
+        deleted_default = theme_id == self._default_theme_id
+        self._available_theme_map.pop(theme_id, None)
+        current_index = self.theme_choice.currentIndex()
+        self.theme_choice.removeItem(current_index)
+        if deleted_default:
+            fallback_id = self.theme_choice.itemData(0)
+            if isinstance(fallback_id, str):
+                self._default_theme_id = fallback_id
+            fallback_index = self.theme_choice.findData(self._default_theme_id)
+            if fallback_index >= 0:
+                self.theme_choice.setCurrentIndex(fallback_index)
+        if theme_id == self._initial_theme_id:
+            self._initial_theme_id = self._default_theme_id
+            self._initial_theme = self._available_theme_map[self._initial_theme_id]
+        self.delete_theme_requested.emit(theme_id)
+        self._update_theme_management_buttons()
 
     def _on_preview_inputs_changed(self, *_args) -> None:
         if self._is_loading_theme:

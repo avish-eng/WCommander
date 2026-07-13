@@ -180,9 +180,28 @@ def test_terminal_dock_shows_frontend_shell_and_backend_beside_title(
 
     dock._handle_started()
 
-    assert dock.runtime_label.text() == "xterm.js · PowerShell 7"
-    assert dock.backend_status_label.text() == "● ConPTY"
+    assert dock.runtime_label.text() == "xterm.js · PowerShell 7 · ConPTY"
+    assert dock.findChild(QLabel, "terminalBackendStatus") is None
     assert "[terminal]" not in dock.output.toPlainText()
+
+
+def test_terminal_dock_marks_unavailable_backend_in_runtime_status(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _qapp()
+    fake_session = FakeSession()
+    fake_session.backend_name = "qprocess"
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+        experimental_pty=True,
+    )
+
+    assert dock.runtime_label.text().endswith(" · Fallback")
+    assert dock.runtime_label.property("backendAvailable") is False
+    assert "unavailable" in dock.runtime_label.toolTip()
 
 
 def test_terminal_dock_moves_secondary_actions_into_overflow(
