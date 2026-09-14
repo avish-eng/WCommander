@@ -9,7 +9,7 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
-from multipane_commander.ui.command_bar import CommandBar, OutputPanel
+from multipane_commander.ui.command_bar import CommandBar
 
 
 _APP: QApplication | None = None
@@ -55,7 +55,7 @@ def test_cd_navigation(tmp_path: Path) -> None:
     navigated: list[Path] = []
     bar.navigate_requested.connect(navigated.append)
 
-    bar._input.setText(f"cd subdir")
+    bar._input.setText("cd subdir")
     _press(bar, Qt.Key.Key_Return)
 
     assert len(navigated) == 1

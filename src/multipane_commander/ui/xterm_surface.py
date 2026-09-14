@@ -8,6 +8,7 @@ import time
 from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import QApplication, QFrame, QVBoxLayout, QWidget
 
+from multipane_commander.terminal.deep.input_tracker import update_draft_from_input
 from multipane_commander.ui.terminal_surface import TerminalSurface
 
 try:
@@ -25,58 +26,6 @@ _MAX_PLAIN_OUTPUT = 200_000
 
 def _asset_directory() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "xterm"
-
-
-def update_draft_from_input(draft: str, data: bytes) -> tuple[str, list[str]]:
-    """Track simple shell input for command history without parsing terminal output."""
-    submitted: list[str] = []
-    text = data.decode("utf-8", errors="ignore")
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if char == "\x1b":
-            index = _skip_escape_sequence(text, index)
-            continue
-        if char in "\r\n":
-            command = draft.strip()
-            if command:
-                submitted.append(command)
-            draft = ""
-        elif char in "\x08\x7f":
-            draft = draft[:-1]
-        elif char == "\x15":  # Ctrl+U
-            draft = ""
-        elif char == "\x17":  # Ctrl+W
-            draft = draft.rstrip().rsplit(" ", 1)[0] if draft.strip() else ""
-        elif char in "\x03\x04\x11\x1a":  # interrupt/EOF/resume/suspend
-            draft = ""
-        elif char >= " ":
-            draft += char
-        index += 1
-    return draft, submitted
-
-
-def _skip_escape_sequence(text: str, start: int) -> int:
-    index = start + 1
-    if index >= len(text):
-        return index
-    if text[index] == "[":
-        index += 1
-        while index < len(text):
-            if "@" <= text[index] <= "~":
-                return index + 1
-            index += 1
-        return index
-    if text[index] == "]":
-        index += 1
-        while index < len(text):
-            if text[index] == "\a":
-                return index + 1
-            if text[index : index + 2] == "\x1b\\":
-                return index + 2
-            index += 1
-        return index
-    return min(len(text), index + 1)
 
 
 @lru_cache(maxsize=1)

@@ -35,6 +35,7 @@ class TerminalConfig:
     bookmarked_commands: list[str] = field(default_factory=list)
     history_panel_visible: bool = False
     experimental_pty: bool = False
+    engine: str = "deep"
 
 
 @dataclass(slots=True)

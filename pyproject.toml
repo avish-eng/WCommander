@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
   "PySide6",
   "send2trash",
-  "pywinpty",
+  "pywinpty; sys_platform == 'win32'",
   "py7zr",
   "libarchive-c",
   "watchdog",

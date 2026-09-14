@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ui_wait import wait_for_pane
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
@@ -63,6 +65,7 @@ def _make_pane(path: Path) -> PaneView:
     state = PaneState(title="Test", tabs=[TabState(title=path.name or "root", path=path)])
     pane = PaneView(state, bookmark_store=BookmarkStore(), active=True)
     pane.refresh()
+    wait_for_pane(pane)
     return pane
 
 
@@ -97,6 +100,7 @@ def test_R1_f2_emits_rename(tmp_path: Path) -> None:
     pane = _make_pane(tmp_path)
     _populate_dir(tmp_path)
     pane.refresh()
+    wait_for_pane(pane)
     captured: list[str] = []
     pane.operation_requested.connect(captured.append)
 
@@ -109,6 +113,7 @@ def test_R1_shift_f6_emits_rename(tmp_path: Path) -> None:
     pane = _make_pane(tmp_path)
     _populate_dir(tmp_path)
     pane.refresh()
+    wait_for_pane(pane)
     captured: list[str] = []
     pane.operation_requested.connect(captured.append)
 
@@ -121,6 +126,7 @@ def test_R2_f5_f6_f7_f8_delete_emit_operations(tmp_path: Path) -> None:
     pane = _make_pane(tmp_path)
     _populate_dir(tmp_path)
     pane.refresh()
+    wait_for_pane(pane)
 
     cases: list[tuple[Qt.Key, str, Qt.KeyboardModifier]] = [
         (Qt.Key.Key_F5, "copy", Qt.KeyboardModifier.NoModifier),

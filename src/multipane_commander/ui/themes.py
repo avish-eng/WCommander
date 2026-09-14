@@ -483,6 +483,41 @@ QFrame#terminalHistoryPanel {{
     border: none;
     border-radius: 8px;
 }}
+QFrame#deepTerminalSurface,
+QWidget#deepTerminalWebView {{
+    background: {palette.input_bg};
+    border: none;
+    border-radius: 8px;
+}}
+QFrame#terminalSearchBar {{
+    background: {_mix(palette.input_bg, palette.panel_bg, 0.5)};
+    border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.42)};
+    border-radius: 7px;
+}}
+QLineEdit#terminalSearchInput {{
+    background: transparent;
+    border: none;
+    color: {palette.text_primary};
+    padding: 1px 2px;
+    font-size: {max(8, font_size - 1)}pt;
+}}
+QLabel#terminalSearchMatch {{
+    color: {palette.text_muted};
+    font-size: {max(8, font_size - 1)}pt;
+}}
+QPushButton#terminalSearchNav {{
+    background: {palette.button_bg};
+    border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.42)};
+    border-radius: 4px;
+    color: {palette.text_primary};
+    min-width: 20px;
+    max-height: 20px;
+    padding: 0px 4px;
+}}
+QPushButton#terminalSearchNav:checked {{
+    background: {palette.secondary_button_active_bg};
+    color: {palette.secondary_button_active_text};
+}}
 QFrame#pane[activePane="true"] {{
     background: {_lighten(palette.panel_bg, 0.045)};
     border: 1px solid {_mix(palette.panel_border, palette.window_bg, 0.42)};
@@ -686,6 +721,19 @@ QWidget#breadcrumbHost {{
     border: none;
     border-radius: 7px;
     min-height: 30px;
+}}
+QLineEdit#panePathEditor {{
+    background: {palette.breadcrumb_bg};
+    border: 1px solid {palette.active_pane_border};
+    border-radius: 7px;
+    color: {palette.breadcrumb_text};
+    min-height: 30px;
+    padding: 0px 7px;
+    selection-background-color: {palette.selection_bg};
+}}
+QLineEdit#panePathEditor[invalid="true"] {{
+    border-color: {palette.bookmark_active_text};
+    color: {palette.bookmark_active_text};
 }}
 QWidget#tabStripHost {{
     background: transparent;

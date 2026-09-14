@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from multipane_commander.services.jobs.model import FileJobSnapshot
@@ -55,6 +54,8 @@ class JobsView(QFrame):
             f"{progress_text} | "
             f"{snapshot.current_label}"
         )
+        if snapshot.transfer is not None:
+            text += " | " + snapshot.transfer.text
         if existing is None:
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, snapshot.id)

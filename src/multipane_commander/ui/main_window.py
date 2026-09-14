@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QTimer, QUrl, Qt
-from PySide6.QtGui import QAction, QCursor, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCursor, QDesktopServices, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -29,6 +29,7 @@ from multipane_commander.services.ai import AgentRunner, PaneRoots
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.services.env_path import PathSnapshot, path_snapshot
 from multipane_commander.services.fs.local_fs import LocalFileSystem
+from multipane_commander.services.jobs.planning import plan_transfer
 from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
 from multipane_commander.services.undo import UndoRecord, UndoStack
@@ -36,9 +37,16 @@ from multipane_commander.platform import root_paths, root_section_label, same_fi
 from multipane_commander.ui.command_bar import CommandBar
 from multipane_commander.ui.env_path_dialog import EnvPathDialog
 from multipane_commander.ui.function_key_bar import build_function_key_bar
+from multipane_commander.ui.shortcuts import bind_window_shortcuts
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
-from multipane_commander.ui.terminal_dock import TerminalDock
+from multipane_commander.ui.deep_terminal import (
+    ENGINE_CLASSIC,
+    ENGINE_DEEP,
+    create_terminal_dock,
+    deep_terminal_available,
+    resolve_engine,
+)
 from multipane_commander.ui.theme_editor import ThemeEditorDialog
 from multipane_commander.ui.themes import (
     available_themes,
@@ -175,7 +183,8 @@ class MainWindow(QMainWindow):
         self._single_left_previous_maximized = False
         self.pane_views: list[PaneView] = []
         self.jobs_view = JobsView()
-        self.terminal_dock = TerminalDock(
+        self.terminal_dock = create_terminal_dock(
+            engine=self.context.config.terminal.engine,
             initial_directory=self.context.state.panes[self.context.state.layout.active_pane_index].tabs[0].path,
             visible=self.context.config.show_terminal,
             follow_active_pane=self.context.config.follow_active_pane_terminal,
@@ -184,6 +193,7 @@ class MainWindow(QMainWindow):
             bookmarked_commands=self.context.config.terminal.bookmarked_commands,
             history_panel_visible=self.context.config.terminal.history_panel_visible,
         )
+        self._terminal_engine = self._terminal_dock_engine()
         self.setWindowTitle("Multi-Pane Commander")
         self.resize(self.context.state.window.width, self.context.state.window.height)
         self.setMinimumSize(1000, 700)
@@ -341,69 +351,7 @@ class MainWindow(QMainWindow):
         ]
 
     def _bind_shortcuts(self) -> None:
-        self._next_pane_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Tab), self, activated=self._focus_next_pane)
-        self._previous_pane_shortcut = QShortcut(
-            QKeySequence(Qt.Key.Key_Backtab), self, activated=self._focus_previous_pane
-        )
-        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=self._show_help)
-        QShortcut(QKeySequence(Qt.Key.Key_F2), self, activated=self._rename_in_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F3), self, activated=self._toggle_passive_quick_view)
-        QShortcut(QKeySequence(Qt.Key.Key_F4), self, activated=self._edit_in_active_pane)
-        QShortcut(QKeySequence("Shift+F3"), self, activated=self._open_external_viewer)
-        QShortcut(QKeySequence("Shift+F4"), self, activated=self._open_with_default_app)
-        QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._toggle_quick_view_raw_mode)
-        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._refresh_active_pane)
-        QShortcut(QKeySequence("Ctrl+I"), self, activated=self._toggle_quick_view_ai_mode)
-        QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab_in_active_pane)
-        QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_tab_in_active_pane)
-        QShortcut(QKeySequence("Ctrl+Tab"), self, activated=self._next_tab_in_active_pane)
-        QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, activated=self._previous_tab_in_active_pane)
-        QShortcut(QKeySequence("Ctrl+Shift+V"), self, activated=self._toggle_thumbnail_mode_in_active_pane)
-        QShortcut(QKeySequence.StandardKey.Copy, self, activated=self._copy_selection_to_clipboard)
-        QShortcut(QKeySequence.StandardKey.Cut, self, activated=self._cut_selection_to_clipboard)
-        QShortcut(QKeySequence.StandardKey.Paste, self, activated=self._paste_clipboard_into_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F5), self, activated=self._copy_from_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F6), self, activated=self._move_from_active_pane)
-        QShortcut(QKeySequence("Shift+F6"), self, activated=self._rename_in_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F7), self, activated=self._mkdir_in_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F8), self, activated=self._delete_from_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self._delete_from_active_pane)
-        QShortcut(QKeySequence("Shift+F8"), self, activated=self._delete_from_active_pane_permanent)
-        QShortcut(QKeySequence("Shift+Del"), self, activated=self._delete_from_active_pane_permanent)
-        QShortcut(QKeySequence("Alt+1"), self, activated=self._apply_default_workspace_layout)
-        QShortcut(QKeySequence("Alt+2"), self, activated=self._apply_focus_files_layout)
-        QShortcut(QKeySequence("Alt+3"), self, activated=self._apply_focus_terminal_layout)
-        QShortcut(QKeySequence("Alt+4"), self, activated=self._apply_terminal_right_layout)
-        QShortcut(QKeySequence("Alt+5"), self, activated=self._apply_terminal_left_layout)
-        QShortcut(QKeySequence("Alt+6"), self, activated=self._apply_balanced_layout)
-        QShortcut(QKeySequence("Alt+7"), self, activated=self._apply_single_left_layout)
-        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._paste_active_filename_to_terminal)
-        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._paste_active_filename_to_terminal)
-        QShortcut(QKeySequence("Alt+Return"), self, activated=self._paste_active_full_path_to_terminal)
-        QShortcut(QKeySequence("Alt+Enter"), self, activated=self._paste_active_full_path_to_terminal)
-        QShortcut(QKeySequence("Alt+F1"), self, activated=self._show_drive_menu_for_active_pane)
-        QShortcut(QKeySequence("Alt+F2"), self, activated=self._show_drive_menu_for_passive_pane)
-        QShortcut(QKeySequence("Ctrl+S"), self, activated=self._show_quick_filter_in_active_pane)
-        QShortcut(QKeySequence("Alt+Left"), self, activated=self._focus_pane_left)
-        QShortcut(QKeySequence("Alt+Right"), self, activated=self._focus_pane_right)
-        QShortcut(QKeySequence("Alt+Up"), self, activated=self._focus_pane_up)
-        QShortcut(QKeySequence("Alt+Down"), self, activated=self._focus_pane_down)
-        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_last_operation)
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_last_operation)
-        QShortcut(QKeySequence("Ctrl+M"), self, activated=self._multi_rename_in_active_pane)
-        QShortcut(QKeySequence("Alt+F7"), self, activated=self._find_files_in_active_pane)
-        QShortcut(QKeySequence(Qt.Key.Key_F9), self, activated=self._toggle_terminal)
-        QShortcut(QKeySequence(Qt.Key.Key_F10), self, activated=self._show_main_menu)
-        QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self._show_layout_menu)
-        QShortcut(QKeySequence(Qt.Key.Key_F12), self, activated=self._toggle_jobs_view)
-        QShortcut(QKeySequence("Ctrl+`"), self, activated=self._toggle_terminal)
-        QShortcut(QKeySequence("Ctrl+Shift+`"), self, activated=self._toggle_terminal_maximized)
-        QShortcut(QKeySequence("Ctrl+Shift+K"), self, activated=self._force_kill_terminal_program)
-        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._open_ai_palette)
-        QShortcut(QKeySequence("Ctrl+Shift+I"), self, activated=self._toggle_ai_pane)
-        QShortcut(QKeySequence("Ctrl+Shift+C"), self, activated=self._toggle_ai_chat)
-        QShortcut(QKeySequence("Ctrl+G"), self, activated=self._focus_command_bar)
-        QShortcut(QKeySequence("Ctrl+P"), self, activated=self._open_path_editor)
+        bind_window_shortcuts(self)
 
     def _bind_command_bar(self) -> None:
         if self.command_bar is None:
@@ -424,11 +372,67 @@ class MainWindow(QMainWindow):
         self.job_manager.job_changed.connect(self.jobs_view.upsert_snapshot)
         self.job_manager.job_removed.connect(self.jobs_view.remove_snapshot)
         self.jobs_view.cancel_requested.connect(self.job_manager.cancel_job)
-        self.terminal_dock.maximize_requested.connect(self._toggle_terminal_maximized)
-        self.terminal_dock.follow_active_pane_toggled.connect(self._set_follow_active_pane_terminal)
-        self.terminal_dock.commands_changed.connect(self._persist_terminal_commands)
-        self.terminal_dock.history_panel_visibility_changed.connect(self._persist_terminal_history_panel_visible)
-        self.terminal_dock.experimental_pty_toggled.connect(self._persist_terminal_experimental_pty)
+        self._connect_terminal_signals(self.terminal_dock)
+
+    def _connect_terminal_signals(self, dock) -> None:
+        dock.maximize_requested.connect(self._toggle_terminal_maximized)
+        dock.follow_active_pane_toggled.connect(self._set_follow_active_pane_terminal)
+        dock.commands_changed.connect(self._persist_terminal_commands)
+        dock.history_panel_visibility_changed.connect(self._persist_terminal_history_panel_visible)
+        dock.experimental_pty_toggled.connect(self._persist_terminal_experimental_pty)
+
+    def _terminal_dock_engine(self) -> str:
+        if type(self.terminal_dock).__name__ == "DeepTerminalDock":
+            return ENGINE_DEEP
+        return ENGINE_CLASSIC
+
+    def _set_terminal_engine(self, engine: str) -> None:
+        resolved = resolve_engine(engine)
+        if resolved == self._terminal_engine:
+            return
+        current = self.terminal_dock
+        replacement = create_terminal_dock(
+            engine=resolved,
+            initial_directory=current._current_directory
+            if hasattr(current, "_current_directory")
+            else self._active_pane().current_directory(),
+            visible=current.isVisible(),
+            follow_active_pane=self.context.config.follow_active_pane_terminal,
+            experimental_pty=self.context.config.terminal.experimental_pty,
+            recent_commands=current.recent_commands(),
+            bookmarked_commands=current.bookmarked_commands(),
+            history_panel_visible=self.context.config.terminal.history_panel_visible,
+        )
+        self._connect_terminal_signals(replacement)
+        replacement.set_follow_active_pane(self.context.config.follow_active_pane_terminal)
+        replacement.set_history_panel_visible(
+            self.context.config.terminal.history_panel_visible,
+            emit=False,
+        )
+        replaced = False
+        if self.content_splitter is not None and self.content_splitter.widget(1) is current:
+            self.content_splitter.replaceWidget(1, replacement)
+            replaced = True
+        elif self.pane_splitter is not None:
+            index = self.pane_splitter.indexOf(current)
+            if index != -1:
+                self.pane_splitter.replaceWidget(index, replacement)
+                replacement.set_side_by_side_mode(True)
+                replaced = True
+        replacement.setVisible(current.isVisible())
+        if replaced and self.context.state.layout.terminal_maximized:
+            replacement.set_maximized(True)
+        self.terminal_dock = replacement
+        if hasattr(current, "close_session"):
+            current.close_session()
+        current.deleteLater()
+        self._terminal_engine = (
+            ENGINE_DEEP if type(replacement).__name__ == "DeepTerminalDock" else ENGINE_CLASSIC
+        )
+        self.context.config.terminal.engine = self._terminal_engine
+        self._update_terminal_tab_shortcuts()
+        self._update_layout_chip()
+        persist_app_context(self.context)
 
     def _persist_bookmarks(self, bookmarks: list[Path]) -> None:
         self.context.state.bookmarks = bookmarks
@@ -982,6 +986,28 @@ class MainWindow(QMainWindow):
         toggle_commands_panel_action = QAction(commands_panel_label, self)
         toggle_commands_panel_action.triggered.connect(self._toggle_terminal_commands_panel)
         menu.addAction(toggle_commands_panel_action)
+
+        menu.addSeparator()
+        engine_menu = menu.addMenu("Terminal Engine")
+        deep_engine_action = QAction("Deep Terminal", self)
+        deep_engine_action.setCheckable(True)
+        deep_engine_action.setChecked(self._terminal_engine == ENGINE_DEEP)
+        deep_engine_action.setEnabled(deep_terminal_available())
+        deep_engine_action.setToolTip(
+            "Fast xterm.js terminal: live search, clickable links, font zoom, "
+            "prompt-aware directory following"
+        )
+        deep_engine_action.triggered.connect(
+            lambda _checked=False: self._set_terminal_engine(ENGINE_DEEP)
+        )
+        engine_menu.addAction(deep_engine_action)
+        classic_engine_action = QAction("Classic Terminal", self)
+        classic_engine_action.setCheckable(True)
+        classic_engine_action.setChecked(self._terminal_engine == ENGINE_CLASSIC)
+        classic_engine_action.triggered.connect(
+            lambda _checked=False: self._set_terminal_engine(ENGINE_CLASSIC)
+        )
+        engine_menu.addAction(classic_engine_action)
 
         popup_point = QCursor.pos()
         menu_size = menu.sizeHint()
@@ -1579,48 +1605,12 @@ class MainWindow(QMainWindow):
         conflict_policy: str,
         clear_clipboard_on_success: bool = False,
     ) -> None:
-        if not destination_dir.exists() or not destination_dir.is_dir():
-            self._show_error(
-                f"{operation.title()} failed",
-                f"Destination directory does not exist:\n{destination_dir}",
-            )
-            return
-
-        actions: list[FileJobAction] = []
-        for source_path in source_paths:
-            destination_path = destination_dir / source_path.name
-            if (
-                operation == "copy"
-                and conflict_policy == "keep_both"
-                and source_path.parent == destination_dir
-            ):
-                destination_path = self._unique_destination_path(destination_path)
-            if source_path == destination_path:
-                self._show_error(
-                    f"{operation.title()} failed",
-                    f"Source and destination are the same:\n{source_path}",
-                )
-                continue
-
-            replace_existing = False
-            if destination_path.exists():
-                destination_path, replace_existing = self._resolve_conflict(
-                    source_path=source_path,
-                    destination_path=destination_path,
-                    conflict_policy=conflict_policy,
-                    operation=operation,
-                )
-                if destination_path is None:
-                    continue
-
-            actions.append(
-                FileJobAction(
-                    operation=operation,
-                    source=source_path,
-                    destination=destination_path,
-                    replace_existing=replace_existing,
-                )
-            )
+        actions = plan_transfer(
+            operation=operation, sources=source_paths, destination_dir=destination_dir,
+            conflict_policy=conflict_policy, unique_destination=self._unique_destination_path,
+            resolve_conflict=self._resolve_conflict,
+            report_error=lambda message: self._show_error(f"{operation.title()} failed", message),
+        )
 
         if not actions:
             return
@@ -1865,13 +1855,14 @@ class MainWindow(QMainWindow):
         if dialog.exec() != MultiRenameDialog.DialogCode.Accepted:
             return
         previews = dialog.previews()
-        succeeded, errors = apply_renames(
-            previews,
-            rename=self.fs.rename_entry,
-            on_record=lambda src, dst: self.undo_stack.push(
-                UndoRecord(kind="rename", source=src, destination=dst)
-            ),
-        )
+        with self.undo_stack.group():
+            succeeded, errors = apply_renames(
+                previews,
+                rename=self.fs.rename_entry,
+                on_record=lambda src, dst: self.undo_stack.push(
+                    UndoRecord(kind="rename", source=src, destination=dst)
+                ),
+            )
         pane.refresh()
         if errors:
             self._show_error(
@@ -1880,33 +1871,14 @@ class MainWindow(QMainWindow):
             )
 
     def _undo_last_operation(self) -> None:
-        record = self.undo_stack.pop()
-        if record is None:
-            show_message(
-                parent=self,
-                title="Undo",
-                message="Nothing to undo.",
-                level="info",
-                accept_label="Close",
-            )
-            return
-        # invert: move destination back to source
-        if not record.destination.exists():
-            self._show_error(
-                "Undo failed",
-                f"Cannot undo {record.kind}: {record.destination} no longer exists.",
-            )
-            return
-        if record.source.exists():
-            self._show_error(
-                "Undo failed",
-                f"Cannot undo {record.kind}: {record.source} now exists.",
-            )
-            return
         try:
-            self.fs.rename_entry(record.destination, record.source)
+            undone = self.undo_stack.undo(self.fs)
         except OSError as exc:
-            self._show_error("Undo failed", f"{record.destination} -> {record.source}\n\n{exc}")
+            self._show_error("Undo failed", str(exc))
+            return
+        if not undone:
+            show_message(parent=self, title="Undo", message="Nothing to undo.",
+                         level="info", accept_label="Close")
             return
         for pane in self.pane_views:
             pane.refresh()
@@ -1992,8 +1964,15 @@ class MainWindow(QMainWindow):
         success_title: str,
         clear_clipboard_on_success: bool = False,
     ) -> None:
-        self._active_pane().refresh()
-        self._passive_pane().refresh()
+        with self.undo_stack.group():
+            for action in result.successful_actions:
+                if action.operation == "move" and action.destination is not None:
+                    self.undo_stack.push(UndoRecord("move", action.source, action.destination,
+                                                    action.undo_backup))
+        if getattr(self, "_closing_after_jobs", False):
+            return
+        for pane in self.pane_views:
+            pane.refresh()
         self._active_pane().focus_list()
 
         if clear_clipboard_on_success and not result.errors and not result.cancelled:
@@ -2113,6 +2092,17 @@ class MainWindow(QMainWindow):
             persist_app_context(self.context)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self.job_manager.has_active_jobs():
+            event.ignore()
+            if not getattr(self, "_closing_after_jobs", False):
+                self._closing_after_jobs = True
+                self.job_manager.idle.connect(self.close)
+                self.job_manager.cancel_all()
+            return
+        for pane in self.pane_views:
+            if hasattr(pane, "stop_background_tasks"):
+                pane.stop_background_tasks()
+        self.undo_stack.clear()
         if (
             self.context.state.layout.layout_mode == "single_left"
             and self._single_left_previous_geometry is not None

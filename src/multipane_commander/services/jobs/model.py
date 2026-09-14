@@ -12,6 +12,7 @@ class FileJobAction:
     destination: Path | None = None
     replace_existing: bool = False
     bypass_trash: bool = False
+    undo_backup: Path | None = None
 
 
 @dataclass(slots=True)
@@ -20,6 +21,35 @@ class FileJobResult:
     processed_actions: int = 0
     cancelled: bool = False
     errors: list[str] = field(default_factory=list)
+    successful_actions: list[FileJobAction] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class TransferProgress:
+    bytes_done: int = 0
+    bytes_total: int = 0
+    bytes_per_second: float = 0
+    seconds_remaining: float | None = None
+    label: str = ""
+
+    @property
+    def text(self) -> str:
+        def size(value):
+            for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+                if value < 1024:
+                    return f"{value:.1f} {unit}"
+                value /= 1024
+            return f"{value:.1f} PiB"
+
+        eta = (
+            f" · {self.seconds_remaining:.0f}s remaining"
+            if self.seconds_remaining is not None
+            else ""
+        )
+        return (
+            f"{self.label} · {size(self.bytes_done)} / {size(self.bytes_total)}"
+            f" · {size(self.bytes_per_second)}/s{eta}"
+        )
 
 
 @dataclass(slots=True)
@@ -32,6 +62,7 @@ class FileJobSnapshot:
     current_label: str = "Queued"
     status: str = "queued"
     errors: list[str] = field(default_factory=list)
+    transfer: TransferProgress | None = None
 
     @property
     def progress_percent(self) -> int:

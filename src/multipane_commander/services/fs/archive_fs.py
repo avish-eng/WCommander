@@ -9,12 +9,14 @@ breadcrumb behaviour for free.
 
 from __future__ import annotations
 
-import shutil
 import tempfile
+import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from multipane_commander.domain.entries import EntryInfo
+from multipane_commander.services.fs.local_fs import LocalFileSystem, OperationCancelled
 
 
 _ARCHIVE_SUFFIXES = {".zip", ".tar", ".7z", ".rar", ".jar"}
@@ -87,12 +89,17 @@ class ArchiveFileSystem:
     swap implementations without conditionals at every call site.
     """
 
+    def __init__(self, *, check_cancel: Callable[[], None] = lambda: None,
+                 on_bytes: Callable[[int], None] = lambda count: None) -> None:
+        self.check_cancel = check_cancel
+        self.on_bytes = on_bytes
+
     def list_dir(self, path: Path) -> list[EntryInfo]:
         ctx = inside_archive(path)
         if ctx is None:
             raise ArchiveReadError(f"{path} is not inside an archive")
         archive_root, inner = ctx
-        return _list_archive_dir(archive_root, inner)
+        return _list_archive_dir(archive_root, inner, check_cancel=self.check_cancel)
 
     def extract_entry_to(self, path: Path, destination: Path) -> None:
         """Extract the archive entry at ``path`` to a real file ``destination``."""
@@ -102,7 +109,16 @@ class ArchiveFileSystem:
         archive_root, inner = ctx
         if not str(inner) or str(inner) == ".":
             raise ArchiveReadError("Cannot extract the archive root itself")
-        _extract_one(archive_root, inner, destination)
+        fs = LocalFileSystem()
+        staged = fs._temporary_sibling(destination)
+        try:
+            _extract_one(archive_root, inner, staged,
+                         check_cancel=self.check_cancel, on_bytes=self.on_bytes)
+            self.check_cancel()
+            fs.replace_entry(staged, destination, operation="move")
+        finally:
+            if os.path.lexists(staged):
+                fs.remove_existing(staged)
 
     def extract_entry_to_temp(self, path: Path) -> Path:
         """Extract ``path`` to a fresh temp file; caller is responsible for cleanup."""
@@ -127,7 +143,8 @@ class ArchiveFileSystem:
         return Path(tmp_path)
 
 
-def _list_archive_dir(archive_root: Path, inner: PurePosixPath) -> list[EntryInfo]:
+def _list_archive_dir(archive_root: Path, inner: PurePosixPath, *,
+                      check_cancel: Callable[[], None] = lambda: None) -> list[EntryInfo]:
     """Return the entries directly under ``inner`` inside ``archive_root``."""
     import libarchive
 
@@ -141,14 +158,14 @@ def _list_archive_dir(archive_root: Path, inner: PurePosixPath) -> list[EntryInf
     try:
         with libarchive.file_reader(str(archive_root)) as reader:
             for entry in reader:
+                check_cancel()
                 pathname = entry.pathname
                 if not pathname:
                     continue
                 # Normalise: strip leading "./", strip trailing "/".
-                normalised = pathname[2:] if pathname.startswith("./") else pathname
-                is_dir_entry = normalised.endswith("/")
-                normalised = normalised.rstrip("/")
-                if not normalised:
+                normalised = str(_safe_member(pathname))
+                is_dir_entry = entry.isdir
+                if normalised in {"", "."}:
                     continue
                 if prefix:
                     if not normalised.startswith(prefix):
@@ -184,6 +201,8 @@ def _list_archive_dir(archive_root: Path, inner: PurePosixPath) -> list[EntryInf
                     extension="" if is_dir_entry else Path(rest).suffix.lstrip(".").upper(),
                     modified_at=modified,
                 )
+    except OperationCancelled:
+        raise
     except Exception as exc:  # libarchive raises ArchiveError, OSError, etc.
         raise ArchiveReadError(f"Failed to read {archive_root}: {exc}") from exc
 
@@ -193,28 +212,46 @@ def _list_archive_dir(archive_root: Path, inner: PurePosixPath) -> list[EntryInf
     )
 
 
-def _extract_one(archive_root: Path, inner: PurePosixPath, destination: Path) -> None:
-    """Extract the single entry ``inner`` from ``archive_root`` to ``destination``."""
+def _safe_member(name: str) -> PurePosixPath:
+    path = PurePosixPath(name.replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts or any(":" in part for part in path.parts):
+        raise ArchiveReadError(f"Unsafe archive member: {name}")
+    return path
+
+
+def _extract_one(archive_root: Path, inner: PurePosixPath, destination: Path, *,
+                 check_cancel: Callable[[], None] = lambda: None,
+                 on_bytes: Callable[[int], None] = lambda count: None) -> None:
+    """Extract a file or subtree, including archives with implicit directories."""
     import libarchive
 
-    target_name = str(inner).rstrip("/")
-    if target_name.startswith("./"):
-        target_name = target_name[2:]
+    target = _safe_member(str(inner))
     found = False
     try:
         with libarchive.file_reader(str(archive_root)) as reader:
             for entry in reader:
-                pathname = entry.pathname or ""
-                if pathname.startswith("./"):
-                    pathname = pathname[2:]
-                pathname = pathname.rstrip("/")
-                if pathname != target_name:
+                check_cancel()
+                member = _safe_member(entry.pathname or "")
+                if member != target and not member.is_relative_to(target):
                     continue
                 found = True
-                with destination.open("wb") as out:
+                if entry.issym or entry.islnk or not (entry.isfile or entry.isdir):
+                    raise ArchiveReadError(f"Unsupported archive link or special file: {member}")
+                relative = member.relative_to(target)
+                output = destination.joinpath(*relative.parts)
+                if not output.resolve().is_relative_to(destination.resolve()):
+                    raise ArchiveReadError(f"Unsafe extraction destination: {member}")
+                if entry.isdir:
+                    output.mkdir(parents=True, exist_ok=True)
+                    continue
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with output.open("wb") as out:
                     for block in entry.get_blocks():
+                        check_cancel()
                         out.write(block)
-                break
+                        on_bytes(len(block))
+    except (OperationCancelled, ArchiveReadError):
+        raise
     except Exception as exc:
         raise ArchiveReadError(f"Failed to read {archive_root}: {exc}") from exc
     if not found:

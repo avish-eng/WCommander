@@ -4,7 +4,7 @@
 # also needs the native libarchive runtime installed and discoverable on PATH.
 PySide6
 send2trash
-pywinpty
+pywinpty; sys_platform == 'win32'
 py7zr
 libarchive-c
 watchdog

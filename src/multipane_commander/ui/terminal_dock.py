@@ -3,73 +3,33 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from PySide6.QtCore import Property, QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPalette
+from PySide6.QtCore import QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QVBoxLayout,
 )
 
 from multipane_commander.terminal.session import TerminalSession
+from multipane_commander.ui.command_history import (
+    CommandHistoryDelegate as _CommandHistoryDelegate,
+)
+from multipane_commander.ui.command_history import (
+    CommandHistoryList as _CommandHistoryList,
+)
+from multipane_commander.ui.command_history import PINNED_COMMAND_ROLE as _PINNED_COMMAND_ROLE
 from multipane_commander.ui.xterm_surface import WEB_TERMINAL_AVAILABLE, create_terminal_surface
 
 
-_PINNED_COMMAND_ROLE = Qt.ItemDataRole.UserRole
-
-
-class _CommandHistoryList(QListWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        self._pinned_text_color = QColor("#D8A144")
-
-    def _get_pinned_text_color(self) -> QColor:
-        return self._pinned_text_color
-
-    def _set_pinned_text_color(self, color: QColor) -> None:
-        self._pinned_text_color = QColor(color)
-        self.viewport().update()
-
-    pinnedTextColor = Property(
-        QColor,
-        _get_pinned_text_color,
-        _set_pinned_text_color,
-    )
-
-
-class _CommandHistoryDelegate(QStyledItemDelegate):
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:  # type: ignore[override]
-        pinned = bool(index.data(_PINNED_COMMAND_ROLE))
-        paint_option = QStyleOptionViewItem(option)
-        if pinned:
-            accent = option.palette.highlight().color()
-            tint = QColor(accent)
-            tint.setAlpha(24)
-            painter.fillRect(option.rect, tint)
-            history_list = self.parent()
-            if isinstance(history_list, _CommandHistoryList):
-                pinned_text = history_list._get_pinned_text_color()
-                paint_option.palette.setColor(QPalette.ColorRole.Text, pinned_text)
-                paint_option.palette.setColor(
-                    QPalette.ColorRole.HighlightedText,
-                    pinned_text,
-                )
-
-        super().paint(painter, paint_option, index)
-
-        if pinned:
-            painter.fillRect(option.rect.x(), option.rect.y(), 2, option.rect.height(), accent)
+_MAX_HISTORY_ITEMS = 100
 
 
 class TerminalDock(QFrame):
@@ -104,6 +64,7 @@ class TerminalDock(QFrame):
         self._experimental_pty = experimental_pty or WEB_TERMINAL_AVAILABLE
         self._recent_commands = self._unique_commands(recent_commands or [])
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])
+        self._trim_recent_commands()
         self._output_press_pos: QPoint | None = None
         self._output_dragged = False
         self._pty_ready_timer = QTimer(self)
@@ -475,10 +436,34 @@ class TerminalDock(QFrame):
             if self._command_key(existing) != command_key
         ]
         self._recent_commands.insert(0, cleaned)
-        self._recent_commands = self._recent_commands[:100]
+        self._trim_recent_commands()
         self._refresh_command_lists()
         self._update_rerun_button()
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
+
+    def _trim_recent_commands(self) -> None:
+        """Keep the history at `_MAX_HISTORY_ITEMS` visible rows, pinned first.
+
+        Pinned commands are never dropped, so they claim their slots first and
+        the oldest recent commands fall off the end. Recent entries shadowed by
+        a pin are kept but cost nothing: they are hidden while pinned and become
+        visible again on unpin.
+        """
+        pinned_keys = {
+            self._command_key(command) for command in self._bookmarked_commands
+        }
+        budget = max(0, _MAX_HISTORY_ITEMS - len(pinned_keys))
+        trimmed: list[str] = []
+        visible = 0
+        for command in self._recent_commands:
+            if self._command_key(command) in pinned_keys:
+                trimmed.append(command)
+                continue
+            if visible >= budget:
+                break
+            trimmed.append(command)
+            visible += 1
+        self._recent_commands = trimmed
 
     def _refresh_command_lists(self) -> None:
         self.command_list.clear()
@@ -519,34 +504,49 @@ class TerminalDock(QFrame):
     def _show_command_context_menu(self, position: QPoint) -> None:
         item = self.command_list.itemAt(position)
         if item is None:
-            return
-
-        self.command_list.setCurrentItem(item)
-        self.command_list.setFocus(Qt.FocusReason.MouseFocusReason)
-        command = item.text()
-        menu = self._build_command_context_menu(
-            command,
-            pinned=bool(item.data(_PINNED_COMMAND_ROLE)),
-        )
+            menu = self._build_command_context_menu(None, pinned=False)
+        else:
+            self.command_list.setCurrentItem(item)
+            self.command_list.setFocus(Qt.FocusReason.MouseFocusReason)
+            menu = self._build_command_context_menu(
+                item.text(),
+                pinned=bool(item.data(_PINNED_COMMAND_ROLE)),
+            )
         menu.exec(self.command_list.viewport().mapToGlobal(position))
 
-    def _build_command_context_menu(self, command: str, *, pinned: bool) -> QMenu:
+    def _build_command_context_menu(self, command: str | None, *, pinned: bool) -> QMenu:
         menu = QMenu(self)
-        use_action = menu.addAction("Use command")
-        use_action.triggered.connect(lambda _checked=False, value=command: self._use_command(value))
-        run_action = menu.addAction("Run command")
-        run_action.triggered.connect(lambda _checked=False, value=command: self._run_command(value))
-        menu.addSeparator()
+        if command is not None:
+            use_action = menu.addAction("Use command")
+            use_action.triggered.connect(lambda _checked=False, value=command: self._use_command(value))
+            run_action = menu.addAction("Run command")
+            run_action.triggered.connect(lambda _checked=False, value=command: self._run_command(value))
+            menu.addSeparator()
 
-        if pinned:
-            unpin_action = menu.addAction("Unpin command")
-            unpin_action.triggered.connect(lambda _checked=False, value=command: self._remove_bookmark(value))
-        else:
-            pin_action = menu.addAction("Pin command")
-            pin_action.setEnabled(command not in self._bookmarked_commands)
-            pin_action.triggered.connect(lambda _checked=False, value=command: self._pin_command(value))
+            if pinned:
+                unpin_action = menu.addAction("Unpin command")
+                unpin_action.triggered.connect(lambda _checked=False, value=command: self._remove_bookmark(value))
+            else:
+                pin_action = menu.addAction("Pin command")
+                pin_action.setEnabled(command not in self._bookmarked_commands)
+                pin_action.triggered.connect(lambda _checked=False, value=command: self._pin_command(value))
+
+            menu.addSeparator()
+
+        clear_action = menu.addAction("Clear history (keeps pinned)")
+        clear_action.setEnabled(bool(self._recent_commands))
+        clear_action.triggered.connect(lambda _checked=False: self._clear_command_history())
 
         return menu
+
+    def _clear_command_history(self) -> None:
+        """Drop every recent command; pinned commands stay in the list."""
+        if not self._recent_commands:
+            return
+        self._recent_commands = []
+        self._refresh_command_lists()
+        self._update_rerun_button()
+        self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
     def _use_selected_command(self) -> None:
         command = self._selected_command()
@@ -577,6 +577,7 @@ class TerminalDock(QFrame):
         if command in self._bookmarked_commands:
             return
         self._bookmarked_commands.append(command)
+        self._trim_recent_commands()
         self._refresh_command_lists()
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
@@ -590,6 +591,7 @@ class TerminalDock(QFrame):
         if command not in self._bookmarked_commands:
             return
         self._bookmarked_commands.remove(command)
+        self._trim_recent_commands()
         self._refresh_command_lists()
         self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 

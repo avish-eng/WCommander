@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ui_wait import wait_for_pane
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
@@ -28,11 +30,13 @@ def _qapp() -> QApplication:
 
 def _build_pane(path: Path) -> PaneView:
     _qapp()
-    return PaneView(
+    pane = PaneView(
         PaneState(title="Test", tabs=[TabState(title="Test", path=path)]),
         bookmark_store=BookmarkStore(),
         active=True,
     )
+    wait_for_pane(pane)
+    return pane
 
 
 def _entry_names(pane: PaneView) -> list[str]:

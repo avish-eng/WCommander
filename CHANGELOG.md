@@ -1,5 +1,18 @@
 # Changelog
 
+
+## Unreleased
+
+- Fix slow Back navigation by batching row-style layout notifications, avoiding unchanged style writes, caching recent directory listings with background revalidation, and using cached directory-entry metadata for local listings.
+
+- Preserve both originals when a move/overwrite fails; stage copies and archive extraction before replacement.
+- Transfer archive files normally and recursively extract archive folders, including implicit and empty directories; reject unsafe member paths and links.
+- Add byte progress, transfer speed, ETA, cooperative copy/extraction cancellation, and graceful shutdown of file jobs.
+- Group multi-rename undo, record successful moves, retain overwritten destinations for undo, and preserve failed undo entries for retry.
+- Move folder reads, search, size calculation, and thumbnail decoding off the UI thread. Render large directories in batches and discard stale results after navigation.
+- Refresh externally changed folders while preserving cursor, marks, filters, and scroll position.
+- Extract transfer planning/execution, navigation helpers, and shortcut registration; add Windows/Linux/macOS CI and platform-specific pywinpty installation.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -18,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Deep Terminal** — a second terminal engine, now the default, that fixes the classic terminal's latency and correctness problems while adding modern conveniences. It ships as two self-contained packages: `terminal/deep/` (backends, shell-integration parser, session) and `ui/deep_terminal/` (xterm.js surface, dock, engine picker).
+  - **Performance.** PTY reads are coalesced on a ~16 ms frame timer and forwarded to xterm.js in one base64 web-channel write per frame instead of one per read; the resize path de-duplicates PTY sizes so layout passes no longer trigger a reflow storm; the classic surface's O(n²) `setPlainText` scrollback rebuild is gone. Raw bytes stream straight to the renderer, so UTF-8 split across reads renders correctly.
+  - **Non-blocking lifecycle.** Spawning, termination and forced cleanup all happen off the GUI thread; the old `waitForStarted(3000)` / `waitForFinished(2000)` / synchronous `taskkill` freezes are gone. Killing escalates Ctrl+C → graceful terminate → force-kill with bounded auto-restart after repeated exits.
+  - **Prompt-aware directory following.** The session parses OSC 7 / OSC 9;9 (working directory), OSC 133 (prompt marks, exit status, command line), OSC 0/2 (title) and OSC 9;4 (progress) with a chunk-boundary-safe incremental parser, and falls back to conservative prompt heuristics when the shell has no integration. `cd` is only written while the shell is idle, so pane navigation can no longer type a path into a running program, and it is skipped entirely when the shell already reports the directory.
+  - **Modern UX.** Live in-terminal search (`Ctrl+F`, match counter, `Enter`/`Shift+Enter` navigation), clickable URL/file links, font zoom (`Ctrl+=`/`Ctrl+-`/`Ctrl+0`), copy/paste (`Ctrl+C` copies when there is a selection, `Ctrl+Insert`/`Shift+Insert`, right-click menu), title display, bell status, a pinnable command history panel with "clear history (keeps pinned)", and a raw-byte replay buffer so a reattached page is never blank.
+  - **Engine selection.** New `terminal.engine` config value (`deep` default, `classic` fallback) plus a **Layout (F11) → Terminal Engine** switch that swaps the live dock, preserves visibility, maximised and side-by-side state, and persists the choice. Deep falls back to Classic automatically when Qt WebEngine is unavailable, and to a line-oriented pipe backend when no PTY can be created.
+- `tests/test_deep_*.py` suites covering the shell-integration parser, backend strategies (including real pipe/ConPTY subprocesses), session directory-sync safety, the xterm surface (batching, replay, clipboard, search routing), the dock, the engine factory, and a full `MainWindow` integration pass.
+- `ui/command_history.py` — the pinned-command list and delegate shared by the classic and Deep terminals.
+- `terminal/deep/input_tracker.py` — incremental, UTF-8-safe command-line tracker used for terminal history.
 - Read-only archive browsing — Enter on a `.zip` / `.tar` / `.tar.gz` / `.tar.bz2` / `.tar.xz` / `.tgz` / `.tbz2` / `.txz` / `.7z` / `.rar` / `.jar` enters the archive as if it were a directory. Subdirectories are walkable; Backspace at the archive root navigates to the archive's parent (back to the local filesystem). Virtual paths are encoded as `Path("/abs/foo.zip/inner/file.txt")` — pathlib's `.parent` semantics give correct breadcrumb behaviour for free, and there's no collision risk because the archive itself is a file (the OS can't hold a real path with the same prefix). New `ArchiveFileSystem` (parallel to `LocalFileSystem`) implements `list_dir` / `extract_entry_to` / `extract_entry_to_temp` via `libarchive-c`. `PaneView.refresh()` swaps `self.fs` between local and archive impls based on whether the active path is inside an archive.
 - F3 Quick View on a file *inside* an archive: `PaneView.set_quick_view_source` extracts the entry to a temp file (`tempfile.mkstemp`, suffix preserved so QuickView dispatches correctly), shows it via the existing renderer pipeline, and re-labels the title back to the virtual file name. Temp files are unlinked when the preview switches.
 - F5 (copy) from inside an archive extracts the selected entries to the destination directory on the local filesystem. The archive itself is untouched. F6 (move) from inside an archive raises a clear "read-only" error rather than silently behaving as copy.

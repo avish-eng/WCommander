@@ -7,124 +7,256 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #0f1724;
-      --panel: #151f2e;
-      --text: #e9eef8;
-      --muted: #9badc7;
-      --line: #2b3b54;
-      --key: #203047;
-      --accent: #6cc7ff;
+      --bg: #101317;
+      --surface: #171b21;
+      --surface-2: #1d222a;
+      --text: #edf1f7;
+      --muted: #a4aebb;
+      --line: #2b323c;
+      --accent: #79b8ff;
+      --accent-soft: #182b40;
+      --key: #252c35;
+      --warning: #f0c36b;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+      font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
     }
     main {
-      max-width: 860px;
+      max-width: 980px;
       margin: 0 auto;
-      padding: 28px;
+      padding: 30px 28px 48px;
+    }
+    header {
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
     }
     h1 {
-      margin: 0 0 4px;
+      margin: 0 0 5px;
       font-size: 28px;
-      letter-spacing: 0;
+      font-weight: 650;
+      letter-spacing: -.4px;
     }
-    p {
-      margin: 0 0 18px;
-      color: var(--muted);
+    header p, .note, .muted { color: var(--muted); }
+    p { margin: 0; }
+    .quick-start {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 18px;
     }
-    section {
-      margin-top: 20px;
+    .quick-start div {
+      padding: 13px 14px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
     }
-    h2 {
-      margin: 0 0 8px;
-      font-size: 15px;
+    .quick-start strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 13px;
       color: var(--accent);
+    }
+    section { margin-top: 28px; }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+      font-weight: 650;
+    }
+    h3 {
+      margin: 19px 0 7px;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0;
+      letter-spacing: .45px;
     }
     table {
       width: 100%;
-      border-collapse: collapse;
-      background: var(--panel);
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      background: var(--surface);
       border: 1px solid var(--line);
+      border-radius: 8px;
     }
     td {
-      padding: 8px 10px;
+      padding: 8px 11px;
       border-top: 1px solid var(--line);
-      vertical-align: top;
+      vertical-align: middle;
     }
-    tr:first-child td {
-      border-top: 0;
-    }
+    tr:first-child td { border-top: 0; }
+    td:first-child { width: 168px; }
     kbd {
       display: inline-block;
-      min-width: 76px;
+      min-width: 78px;
       padding: 2px 7px;
-      border: 1px solid #43546f;
+      border: 1px solid #46505d;
+      border-bottom-color: #596473;
       background: var(--key);
-      border-radius: 4px;
-      color: #f7fbff;
-      font: 13px/1.4 Consolas, "Courier New", monospace;
+      border-radius: 5px;
+      color: var(--text);
+      font: 12px/1.5 Consolas, "Courier New", monospace;
       text-align: center;
       white-space: nowrap;
     }
-    .pair kbd {
-      min-width: 112px;
+    .wide kbd { min-width: 128px; }
+    .callout {
+      padding: 13px 15px;
+      background: var(--accent-soft);
+      border: 1px solid #274a6b;
+      border-radius: 8px;
+      color: #dcecff;
+    }
+    .warning {
+      color: var(--warning);
+      border-color: #62502d;
+      background: #282318;
+    }
+    ul { margin: 8px 0 0; padding-left: 21px; }
+    li { margin: 5px 0; }
+    code { color: var(--accent); }
+    @media (max-width: 700px) {
+      main { padding: 22px 16px 36px; }
+      .quick-start { grid-template-columns: 1fr; }
+      td:first-child { width: 135px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>Multi-Pane Commander</h1>
-    <p>Command list. The active pane is the pane with focus.</p>
+    <header>
+      <h1>Multi-Pane Commander</h1>
+      <p>A practical guide to files, terminal, layouts, themes, and Claude Code.</p>
+      <div class="quick-start">
+        <div><strong>1. Choose a source</strong>Click a pane and select the files you want to work with.</div>
+        <div><strong>2. Choose a destination</strong>The other pane is the default destination for copy and move.</div>
+        <div><strong>3. Use the keyboard</strong><kbd>F5</kbd> copies, <kbd>F6</kbd> moves, and <kbd>F8</kbd> deletes.</div>
+      </div>
+    </header>
 
     <section>
-      <h2>Function Keys</h2>
+      <h2>Core file actions</h2>
       <table>
         <tr><td><kbd>F1</kbd></td><td>Open this help</td></tr>
-        <tr><td><kbd>F2</kbd></td><td>Rename selected item</td></tr>
-        <tr><td><kbd>F3</kbd></td><td>Quick View in the passive pane</td></tr>
-        <tr><td><kbd>F4</kbd></td><td>Edit selected file</td></tr>
-        <tr><td><kbd>F5</kbd></td><td>Copy to passive pane</td></tr>
-        <tr><td><kbd>F6</kbd></td><td>Move to passive pane</td></tr>
-        <tr><td><kbd>F7</kbd></td><td>Create directory</td></tr>
-        <tr><td><kbd>F8</kbd></td><td>Delete selected items</td></tr>
-        <tr><td><kbd>F9</kbd></td><td>Show or hide terminal</td></tr>
-        <tr><td><kbd>F10</kbd></td><td>Open main menu</td></tr>
-        <tr><td><kbd>F11</kbd></td><td>Layout menu</td></tr>
-        <tr><td><kbd>F12</kbd></td><td>Jobs view</td></tr>
+        <tr><td><kbd>F2</kbd></td><td>Rename the selected item</td></tr>
+        <tr><td><kbd>F3</kbd></td><td>Show or hide Quick View in the passive pane</td></tr>
+        <tr><td><kbd>F4</kbd></td><td>Edit the selected file</td></tr>
+        <tr><td><kbd>F5</kbd></td><td>Copy selected or marked items to the passive pane</td></tr>
+        <tr><td><kbd>F6</kbd></td><td>Move selected or marked items to the passive pane</td></tr>
+        <tr><td><kbd>F7</kbd></td><td>Create a directory</td></tr>
+        <tr><td><kbd>F8</kbd></td><td>Delete selected or marked items</td></tr>
+        <tr class="wide"><td><kbd>Shift+F8</kbd></td><td>Permanently delete, bypassing the Recycle Bin</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+M</kbd></td><td>Multi-rename marked or selected items with a live preview</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Z</kbd></td><td>Undo the last supported file operation</td></tr>
+      </table>
+      <p class="note" style="margin-top:9px">Marked items take priority. If nothing is marked, the item under the cursor is used.</p>
+    </section>
+
+    <section>
+      <h2>Navigation and selection</h2>
+      <table>
+        <tr><td><kbd>Tab</kbd></td><td>Move focus to the next pane</td></tr>
+        <tr><td><kbd>Shift+Tab</kbd></td><td>Move focus to the previous pane</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Open a file, or enter a directory or supported archive</td></tr>
+        <tr><td><kbd>Backspace</kbd></td><td>Go to the parent directory</td></tr>
+        <tr><td><kbd>Insert</kbd></td><td>Mark or unmark the current item</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Mark an item; on a directory, calculate its recursive size</td></tr>
+        <tr class="wide"><td><kbd>Alt+Arrow</kbd></td><td>Move focus toward a pane</td></tr>
+        <tr class="wide"><td><kbd>Alt+F1 / F2</kbd></td><td>Open the drive menu for the active or passive pane</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+S</kbd></td><td>Open the quick filter for the active pane</td></tr>
+        <tr class="wide"><td><kbd>Alt+F7</kbd></td><td>Find files from the active directory</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+R</kbd></td><td>Refresh the active pane</td></tr>
       </table>
     </section>
 
     <section>
-      <h2>Navigation</h2>
+      <h2>Tabs and viewing</h2>
       <table>
-        <tr><td><kbd>Tab</kbd></td><td>Switch active pane</td></tr>
-        <tr><td><kbd>Enter</kbd></td><td>Open file or enter directory/archive</td></tr>
-        <tr><td><kbd>Backspace</kbd></td><td>Go to parent directory</td></tr>
-        <tr><td><kbd>Insert</kbd></td><td>Mark or unmark item</td></tr>
-        <tr><td><kbd>Space</kbd></td><td>Mark item; on a directory, compute size</td></tr>
-        <tr class="pair"><td><kbd>Alt+Arrow</kbd></td><td>Move focus by pane direction</td></tr>
-        <tr class="pair"><td><kbd>Alt+F1/F2</kbd></td><td>Drive menu for active/passive pane</td></tr>
-        <tr class="pair"><td><kbd>Alt+7</kbd></td><td>Use a compact left-pane window; F9 adds the terminal below it</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+T</kbd></td><td>Open a new tab in the active pane</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+W</kbd></td><td>Close the current tab</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Tab</kbd></td><td>Move to the next tab</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+Tab</kbd></td><td>Move to the previous tab</td></tr>
+        <tr class="wide"><td><kbd>Shift+F3</kbd></td><td>Open the selected file in the OS-associated viewer</td></tr>
+        <tr class="wide"><td><kbd>Shift+F4</kbd></td><td>Open the selected file in its default application</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+R</kbd></td><td>Toggle raw source while Quick View is open</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+V</kbd></td><td>Toggle thumbnail mode in the active pane</td></tr>
       </table>
     </section>
 
     <section>
-      <h2>Tools</h2>
+      <h2>Embedded terminal</h2>
+      <p class="note">Two engines are available from <strong>Layout (F11) &rarr; Terminal Engine</strong>: <strong>Deep Terminal</strong> (default, xterm.js over a real PTY) and <strong>Classic Terminal</strong> (Qt fallback).</p>
       <table>
-        <tr><td><kbd>Ctrl+S</kbd></td><td>Quick filter current pane</td></tr>
-        <tr><td><kbd>Ctrl+M</kbd></td><td>Multi-rename</td></tr>
-        <tr><td><kbd>Ctrl+Z</kbd></td><td>Undo last rename</td></tr>
-        <tr><td><kbd>Alt+F7</kbd></td><td>Find files</td></tr>
-        <tr><td><kbd>Ctrl+R</kbd></td><td>Refresh active pane</td></tr>
-        <tr><td><kbd>Ctrl+P</kbd></td><td>Edit process PATH</td></tr>
-        <tr><td><kbd>Ctrl+K</kbd></td><td>Open AI command palette</td></tr>
-        <tr><td><kbd>Ctrl+G</kbd></td><td>Focus command bar</td></tr>
+        <tr><td><kbd>F9</kbd></td><td>Show or hide the terminal</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+`</kbd></td><td>Show or hide the terminal</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+`</kbd></td><td>Enter or exit terminal full screen</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Enter</kbd></td><td>Paste the current file name into the terminal</td></tr>
+        <tr class="wide"><td><kbd>Alt+Enter</kbd></td><td>Paste the current item's full path into the terminal</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+K</kbd></td><td>Force-stop the current terminal program and restart the shell</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+F</kbd></td><td>Search terminal output (Deep Terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> / <kbd>Ctrl+0</kbd></td><td>Font zoom (Deep Terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Insert</kbd> / <kbd>Shift+Insert</kbd></td><td>Copy / paste (Deep Terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+C</kbd></td><td>Copy when text is selected, otherwise send interrupt</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+V</kbd></td><td>Paste into the terminal</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+G</kbd></td><td>Focus the command bar</td></tr>
       </table>
+      <ul class="muted">
+        <li>The terminal follows the active pane's directory by default. Directory changes are only sent while the shell is idle, so running programs are never interrupted.</li>
+        <li>The Deep Terminal also understands OSC 7 / OSC 9;9 / OSC 133 shell integration when your shell emits it, and skips redundant directory changes.</li>
+        <li>Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart.</li>
+        <li>Pinned commands appear at the top of the history list with a warmer color.</li>
+        <li>The terminal backend name, such as ConPTY, appears at the end of the status line.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Claude Code and AI</h2>
+      <div class="callout">
+        Navigate the active pane to the project directory, then press <kbd>Ctrl+Shift+C</kbd>.
+        Claude Code opens in the passive pane and uses the active directory as its working directory.
+        Press the shortcut again to close it. Use <strong>New Session</strong> inside the Claude pane when you want a fresh conversation.
+      </div>
+      <table style="margin-top:10px">
+        <tr class="wide"><td><kbd>Ctrl+Shift+C</kbd></td><td>Open or close the embedded Claude Code terminal</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+K</kbd></td><td>Open the AI command palette</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+I</kbd></td><td>Toggle AI summary mode for the current Quick View file</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+I</kbd></td><td>Show or hide the AI pane</td></tr>
+      </table>
+      <p class="note" style="margin-top:9px">Claude features require the <code>claude</code> CLI to be installed, logged in, and available on PATH.</p>
+    </section>
+
+    <section>
+      <h2>Layouts and workspace</h2>
+      <table>
+        <tr><td><kbd>F10</kbd></td><td>Open the main menu</td></tr>
+        <tr><td><kbd>F11</kbd></td><td>Open the layout menu</td></tr>
+        <tr><td><kbd>F12</kbd></td><td>Show or hide the jobs view</td></tr>
+        <tr class="wide"><td><kbd>Alt+1 ... Alt+7</kbd></td><td>Apply a saved layout preset</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+P</kbd></td><td>Edit the process PATH used by the application</td></tr>
+      </table>
+      <p class="note" style="margin-top:9px">The F11 menu also includes terminal-left, terminal-right, balanced, focus, review, and reset options.</p>
+    </section>
+
+    <section>
+      <h2>Themes</h2>
+      <ul>
+        <li>Open the theme editor from the application menu to preview and customize a theme.</li>
+        <li><strong>Save Theme</strong> stores your edited colors as a custom theme.</li>
+        <li><strong>Make Default</strong> selects the theme used when the application starts.</li>
+        <li><strong>Delete Theme</strong> removes custom or built-in themes from the theme list.</li>
+        <li>Deleted themes are exported to the <code>backup themes</code> folder before removal so their definitions can be recovered manually.</li>
+      </ul>
+    </section>
+
+    <section>
+      <div class="callout warning">
+        <strong>Permanent deletion cannot be undone.</strong>
+        Use <kbd>F8</kbd> for normal deletion and reserve <kbd>Shift+F8</kbd> or <kbd>Shift+Delete</kbd> for files you are certain you no longer need.
+      </div>
     </section>
   </main>
 </body>

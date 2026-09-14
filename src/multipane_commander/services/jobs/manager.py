@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import (
@@ -15,125 +16,56 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from multipane_commander.services.fs.archive_fs import ArchiveFileSystem, inside_archive
-from multipane_commander.services.fs.local_fs import LocalFileSystem
+from multipane_commander.services.fs.local_fs import OperationCancelled
+from multipane_commander.services.jobs.transfer import TransferExecutor
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult, FileJobSnapshot
 from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
 
 
 class _FileJobWorker(QObject):
     progress_changed = Signal(int, int, str)
+    transfer_changed = Signal(object)
     finished = Signal(object)
 
     def __init__(self, actions: list[FileJobAction]) -> None:
         super().__init__()
         self.actions = actions
-        self.fs = LocalFileSystem()
-        self.archive_fs = ArchiveFileSystem()
-        self.cancel_requested = False
+        self._cancelled = Event()
+        self.executor = TransferExecutor(self._cancelled, self.transfer_changed.emit)
+        self.fs = self.executor.fs
+        self.archive_fs = self.executor.archive
 
     def cancel(self) -> None:
-        self.cancel_requested = True
+        self._cancelled.set()
 
     def run(self) -> None:
-        processed = 0
-        completed = 0
-        errors: list[str] = []
-
+        result = FileJobResult(completed_actions=0)
         for index, action in enumerate(self.actions, start=1):
-            if self.cancel_requested:
-                self.finished.emit(
-                    FileJobResult(
-                        completed_actions=completed,
-                        processed_actions=processed,
-                        cancelled=True,
-                        errors=errors,
-                    )
-                )
-                return
-
             try:
-                if action.operation in {"copy", "move"} and action.destination is not None:
-                    if action.destination.exists() and not action.replace_existing:
-                        errors.append(
-                            f"{action.source} -> {action.destination}: destination already exists"
-                        )
-                        processed = index
-                        self.progress_changed.emit(
-                            index,
-                            len(self.actions),
-                            f"Skipped {action.source.name}",
-                        )
-                        continue
-
-                    src_in_archive = inside_archive(action.source) is not None
-                    if src_in_archive:
-                        if action.operation == "move":
-                            raise RuntimeError(
-                                "Move from archive is read-only; use copy (F5) instead"
-                            )
-                        self.archive_fs.extract_entry_to(
-                            action.source, action.destination
-                        )
-                    elif action.replace_existing and action.destination.exists():
-                        self.fs.replace_entry(
-                            action.source,
-                            action.destination,
-                            operation=action.operation,
-                        )
-                    elif action.operation == "copy":
-                        self.fs.copy_entry(action.source, action.destination)
-                    else:
-                        self.fs.move_entry(action.source, action.destination)
-                    label = f"{action.source.name} -> {action.destination}"
-                elif action.operation == "delete":
-                    self.fs.delete_entry(action.source, bypass_trash=action.bypass_trash)
-                    label = (
-                        f"Permanently deleted {action.source}"
-                        if action.bypass_trash
-                        else f"Deleted {action.source}"
-                    )
-                else:
-                    errors.append(f"Unsupported action: {action}")
-                    processed = index
-                    self.progress_changed.emit(
-                        index,
-                        len(self.actions),
-                        f"Skipped {action.source.name}",
-                    )
-                    continue
+                self.executor.execute(action)
+            except OperationCancelled:
+                result.cancelled = True
+                break
             except Exception as exc:
-                target = (
-                    action.destination
-                    if action.destination is not None
-                    else action.source
-                )
-                errors.append(f"{action.source} -> {target}: {exc}")
-                processed = index
-                self.progress_changed.emit(
-                    index,
-                    len(self.actions),
-                    f"Failed {action.source.name}",
-                )
-                continue
-
-            processed = index
-            completed += 1
+                result.errors.append(f"{action.source} -> {action.destination or action.source}: {exc}")
+                label = f"Failed {action.source.name}"
+            else:
+                result.completed_actions += 1
+                result.successful_actions.append(action)
+                label = f"Completed {action.source.name}"
+            result.processed_actions = index
             self.progress_changed.emit(index, len(self.actions), label)
-
-        self.finished.emit(
-            FileJobResult(
-                completed_actions=completed,
-                processed_actions=processed,
-                cancelled=False,
-                errors=errors,
-            )
-        )
+        self.finished.emit(result)
 
 
 class _JobEventBridge(QObject):
     progress_marshaled = Signal(int, int, str)
     finished_marshaled = Signal(object)
+    transfer_marshaled = Signal(object)
+
+    @Slot(object)
+    def forward_transfer(self, progress) -> None:
+        self.transfer_marshaled.emit(progress)
 
     @Slot(int, int, str)
     def forward_progress(self, current: int, total: int, label: str) -> None:
@@ -147,6 +79,14 @@ class _JobEventBridge(QObject):
 class JobManager(QObject):
     job_changed = Signal(object)
     job_removed = Signal(str)
+    idle = Signal()
+
+    def cancel_all(self) -> None:
+        for worker in self._active_workers.values():
+            worker.cancel()
+
+    def has_active_jobs(self) -> bool:
+        return bool(self._active_threads)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -163,6 +103,14 @@ class JobManager(QObject):
         worker = self._active_workers.get(job_id)
         if worker is not None:
             worker.cancel()
+            snapshot = self._snapshots[job_id]
+            snapshot.status = "cancelling"
+            snapshot.current_label = "Cancelling…"
+            self.job_changed.emit(replace(snapshot))
+            dialog = self._progress_dialogs.get(job_id)
+            if dialog is not None:
+                dialog.label.setText("Cancelling…")
+                dialog.cancel_button.setEnabled(False)
 
     def start_file_job(
         self,
@@ -199,8 +147,15 @@ class JobManager(QObject):
             current_snapshot.processed_actions = current
             current_snapshot.total_actions = total
             current_snapshot.current_label = label
-            current_snapshot.status = "running"
+            if current_snapshot.status != "cancelling":
+                current_snapshot.status = "running"
             progress.update_progress(current, total, label)
+            self.job_changed.emit(replace(current_snapshot))
+
+        def update_transfer(transfer) -> None:
+            current_snapshot = self._snapshots[snapshot.id]
+            current_snapshot.transfer = transfer
+            progress.update_transfer(transfer)
             self.job_changed.emit(replace(current_snapshot))
 
         def finish_job(result: FileJobResult) -> None:
@@ -220,8 +175,8 @@ class JobManager(QObject):
 
             progress.finish(current_snapshot)
             self.job_changed.emit(replace(current_snapshot))
-            on_finished(result)
             thread.quit()
+            on_finished(result)
 
         def dismiss_finished_job() -> None:
             self._progress_dialogs.pop(snapshot.id, None)
@@ -234,20 +189,25 @@ class JobManager(QObject):
                 self.job_removed.emit(snapshot.id)
 
         def cleanup_job() -> None:
-            worker.deleteLater()
             thread.deleteLater()
             if thread in self._active_threads:
                 self._active_threads.remove(thread)
             self._active_workers.pop(snapshot.id, None)
             self._event_bridges.pop(snapshot.id, None)
+            bridge.deleteLater()
+            if not self._active_threads:
+                self.idle.emit()
 
         thread.started.connect(worker.run)
         worker.progress_changed.connect(bridge.forward_progress)
         worker.finished.connect(bridge.forward_finished)
+        thread.finished.connect(worker.deleteLater)
+        worker.transfer_changed.connect(bridge.forward_transfer)
+        bridge.transfer_marshaled.connect(update_transfer)
         bridge.progress_marshaled.connect(update_progress)
         bridge.finished_marshaled.connect(finish_job)
         thread.finished.connect(cleanup_job)
-        progress.cancel_requested.connect(worker.cancel)
+        progress.cancel_requested.connect(lambda: self.cancel_job(snapshot.id))
         progress.dismiss_requested.connect(dismiss_finished_job)
 
         self._active_threads.append(thread)
@@ -275,6 +235,10 @@ class _JobProgressDialog(QDialog):
 
         self.label = QLabel("Starting...")
         self.label.setObjectName("dialogSectionLabel")
+        self.transfer_label = QLabel()
+        self.transfer_label.setWordWrap(True)
+        self.byte_progress = QProgressBar()
+        self.byte_progress.hide()
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setValue(0)
@@ -293,6 +257,8 @@ class _JobProgressDialog(QDialog):
         card_layout.setSpacing(10)
         card_layout.addWidget(self.label)
         card_layout.addWidget(self.progress_bar)
+        card_layout.addWidget(self.transfer_label)
+        card_layout.addWidget(self.byte_progress)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -320,7 +286,16 @@ class _JobProgressDialog(QDialog):
         self.progress_bar.setValue(current)
         self.label.setText(label)
 
+    def update_transfer(self, transfer) -> None:
+        self.transfer_label.setText(transfer.text)
+        self.byte_progress.show()
+        self.byte_progress.setRange(0, 1000 if transfer.bytes_total else 0)
+        if transfer.bytes_total:
+            self.byte_progress.setValue(min(1000, int(transfer.bytes_done * 1000 / transfer.bytes_total)))
+
     def finish(self, snapshot: FileJobSnapshot) -> None:
+        self.cancel_button.setEnabled(True)
+        self.byte_progress.setRange(0, 1000)
         self.progress_bar.setMaximum(max(snapshot.total_actions, 1))
         self.progress_bar.setValue(snapshot.processed_actions)
         self.label.setText(snapshot.current_label)

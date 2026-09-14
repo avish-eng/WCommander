@@ -254,12 +254,79 @@ def test_terminal_history_uses_item_context_menus(monkeypatch, tmp_path: Path) -
         "Use command",
         "Run command",
         "Pin command",
+        "Clear history (keeps pinned)",
     ]
     assert [action.text() for action in bookmark_menu.actions() if not action.isSeparator()] == [
         "Use command",
         "Run command",
         "Unpin command",
+        "Clear history (keeps pinned)",
     ]
+
+    # Right-clicking empty space still offers the clear action on its own.
+    empty_menu = dock._build_command_context_menu(None, pinned=False)
+    assert [action.text() for action in empty_menu.actions() if not action.isSeparator()] == [
+        "Clear history (keeps pinned)",
+    ]
+
+
+def test_terminal_history_clear_keeps_pinned_commands(monkeypatch, tmp_path: Path) -> None:
+    app = _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+        recent_commands=["dir", "cls", "git status"],
+        bookmarked_commands=["cls"],
+        history_panel_visible=True,
+    )
+    app.processEvents()
+
+    emitted: list[tuple[list[str], list[str]]] = []
+    dock.commands_changed.connect(lambda recent, pinned: emitted.append((recent, pinned)))
+
+    dock._clear_command_history()
+
+    assert [dock.command_list.item(row).text() for row in range(dock.command_list.count())] == [
+        "cls",
+    ]
+    assert dock.recent_commands() == []
+    assert dock.bookmarked_commands() == ["cls"]
+    assert emitted == [([], ["cls"])]
+    assert not dock.rerun_action.isEnabled()
+
+    # Clearing an already-empty history is a no-op and emits nothing further.
+    dock._clear_command_history()
+    assert len(emitted) == 1
+
+
+def test_terminal_history_moves_repeated_command_to_the_top(monkeypatch, tmp_path: Path) -> None:
+    app = _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+        recent_commands=["dir", "cls", "git status"],
+        history_panel_visible=True,
+    )
+    app.processEvents()
+
+    dock._remember_command("git status")
+
+    assert dock.recent_commands() == ["git status", "dir", "cls"]
+    assert [dock.command_list.item(row).text() for row in range(dock.command_list.count())] == [
+        "git status",
+        "dir",
+        "cls",
+    ]
+
+    # Surrounding whitespace is not a different command.
+    dock._remember_command("  dir  ")
+    assert dock.recent_commands() == ["dir", "git status", "cls"]
 
 
 def test_terminal_history_uses_one_headerless_list_with_pinned_commands_first(
@@ -289,3 +356,39 @@ def test_terminal_history_uses_one_headerless_list_with_pinned_commands_first(
     assert dock.command_list.item(0).data(Qt.ItemDataRole.UserRole) is True
     assert dock.command_list.item(1).data(Qt.ItemDataRole.UserRole) is False
     assert dock.command_list.property("pinnedTextColor") == QColor("#D8A144")
+
+
+def test_terminal_history_caps_at_one_hundred_rows_keeping_pinned_and_newest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app = _qapp()
+    fake_session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: fake_session)
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=True,
+        follow_active_pane=True,
+        recent_commands=[f"cmd {index}" for index in range(150)],
+        bookmarked_commands=["cls", "dir"],
+        history_panel_visible=True,
+    )
+    app.processEvents()
+
+    rows = [dock.command_list.item(row).text() for row in range(dock.command_list.count())]
+    assert len(rows) == 100
+    assert rows[:2] == ["cls", "dir"]
+    # Recent commands stay newest-first and the oldest ones fall off the end.
+    assert rows[2:5] == ["cmd 0", "cmd 1", "cmd 2"]
+    assert rows[-1] == "cmd 97"
+
+    dock._remember_command("brand new")
+    rows = [dock.command_list.item(row).text() for row in range(dock.command_list.count())]
+    assert len(rows) == 100
+    assert rows[:3] == ["cls", "dir", "brand new"]
+    assert rows[-1] == "cmd 96"
+
+    # Pinning claims a slot from the recent commands rather than growing the list.
+    dock._pin_command("cmd 0")
+    rows = [dock.command_list.item(row).text() for row in range(dock.command_list.count())]
+    assert len(rows) == 100
+    assert rows[:4] == ["cls", "dir", "cmd 0", "brand new"]

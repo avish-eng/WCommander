@@ -1,24 +1,13 @@
-"""Find Files dialog (SPEC §10.2).
+"""Cancellable file search with streamed results and keyboard navigation.
 
-v1 scope:
-* Glob name pattern matched against each file/dir relative path.
-* Optional substring content search (text only; binary files skipped;
-  files larger than `_CONTENT_SIZE_LIMIT` skipped to keep the search
-  responsive on a single thread).
-* Result count capped at `_MAX_RESULTS` so the UI doesn't drown.
-* Results list double-click navigates the active pane to the result.
-
-Out of v1 scope (called out explicitly):
-* "Feed to listbox" virtual-tab mode (SPEC §10.2 nice-to-have).
-* Regex content search and encoding hints.
-* Background threading (search is synchronous; the cap keeps it bounded).
+Name patterns use glob syntax. Content search skips binaries and files over
+10 MiB. Results are capped at 5,000; Stop keeps results already received.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -36,59 +25,13 @@ from PySide6.QtWidgets import (
 from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
 
 
-_MAX_RESULTS = 5_000
-_CONTENT_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
-
-
-@dataclass(slots=True)
-class FindResult:
-    path: Path
-    matched_content: bool
-
-
-def find_files(
-    root: Path,
-    *,
-    name_pattern: str = "*",
-    content_query: str = "",
-    recursive: bool = True,
-    max_results: int = _MAX_RESULTS,
-) -> list[FindResult]:
-    """Search `root` for files matching `name_pattern` and (optionally)
-    containing `content_query`.
-
-    Pure function — public so tests don't need to spin up the dialog.
-    """
-    pattern = name_pattern or "*"
-    iterator = root.rglob(pattern) if recursive else root.glob(pattern)
-
-    results: list[FindResult] = []
-    needle = content_query.lower()
-
-    for candidate in iterator:
-        if len(results) >= max_results:
-            break
-        try:
-            if not candidate.is_file():
-                continue
-        except OSError:
-            continue
-        if not needle:
-            results.append(FindResult(path=candidate, matched_content=False))
-            continue
-        try:
-            if candidate.stat().st_size > _CONTENT_SIZE_LIMIT:
-                continue
-            with candidate.open("rb") as handle:
-                head = handle.read(_CONTENT_SIZE_LIMIT)
-            if b"\x00" in head[:8192]:
-                continue  # likely binary
-            text = head.decode("utf-8", errors="replace").lower()
-        except OSError:
-            continue
-        if needle in text:
-            results.append(FindResult(path=candidate, matched_content=True))
-    return results
+from multipane_commander.services.background import BackgroundTasks
+from multipane_commander.services.search import (  # compatibility for existing callers
+    MAX_RESULTS as _MAX_RESULTS,
+    CONTENT_SIZE_LIMIT as _CONTENT_SIZE_LIMIT,
+    FindResult,
+    find_files,
+)
 
 
 class FindFilesDialog(QDialog):
@@ -103,6 +46,9 @@ class FindFilesDialog(QDialog):
         self.setWindowTitle("Find Files")
         self._root = root
         self._on_open = on_open
+        self._tasks = BackgroundTasks(self)
+        self._tasks.batch.connect(self._search_batch)
+        self._tasks.finished.connect(self._search_finished)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -129,6 +75,7 @@ class FindFilesDialog(QDialog):
 
         buttons = QDialogButtonBox()
         search_button = buttons.addButton("Search", QDialogButtonBox.ButtonRole.AcceptRole)
+        self._search_button = search_button
         close_button = buttons.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
         search_button.setDefault(True)
         search_button.setAutoDefault(True)
@@ -148,22 +95,44 @@ class FindFilesDialog(QDialog):
         )
 
     def _run_search(self) -> None:
-        results = find_files(
-            self._root,
-            name_pattern=self._name_input.text().strip() or "*",
-            content_query=self._content_input.text().strip(),
-            recursive=self._recursive_checkbox.isChecked(),
-        )
+        if self._tasks.is_running("search"):
+            self._tasks.cancel("search")
+            self._search_button.setText("Search")
+            self._summary.setText(f"Cancelled · {self._results_list.count()} result(s)")
+            return
         self._results_list.clear()
+        self._summary.setText("Searching…")
+        self._search_button.setText("Stop")
+        root = self._root
+        options = dict(name_pattern=self._name_input.text().strip() or "*",
+                       content_query=self._content_input.text().strip(),
+                       recursive=self._recursive_checkbox.isChecked())
+        self._tasks.submit("search", lambda token, publish: find_files(
+            root, **options, cancelled=token, on_batch=publish))
+
+    def _search_batch(self, key, results) -> None:
         for result in results:
             item = QListWidgetItem(str(result.path.relative_to(self._root)))
             item.setData(Qt.ItemDataRole.UserRole, result.path)
             self._results_list.addItem(item)
-        capped = len(results) >= _MAX_RESULTS
-        suffix = f" (capped at {_MAX_RESULTS})" if capped else ""
-        self._summary.setText(f"{len(results)} result(s){suffix}")
+        self._summary.setText(f"Searching… {self._results_list.count()} result(s)")
+
+    def _search_finished(self, key, results, error) -> None:
+        self._search_button.setText("Search")
+        if error:
+            self._summary.setText(f"Search failed: {error}")
+            return
+        count = self._results_list.count()
+        suffix = f" (capped at {_MAX_RESULTS})" if count >= _MAX_RESULTS else ""
+        self._summary.setText(f"{count} result(s){suffix}")
+
+    def done(self, result) -> None:
+        self._tasks.cancel_all()
+        super().done(result)
 
     def _activate_result(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
         if isinstance(path, Path) and self._on_open is not None:
             self._on_open(path)
+
+__all__ = ["FindFilesDialog", "FindResult", "find_files", "_CONTENT_SIZE_LIMIT"]

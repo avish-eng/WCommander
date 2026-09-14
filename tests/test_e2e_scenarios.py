@@ -19,6 +19,8 @@ import os
 import time
 from pathlib import Path
 
+from ui_wait import wait_for_pane
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QEventLoop, Qt
@@ -61,9 +63,12 @@ def _make_main_window(left_dir: Path, right_dir: Path) -> MainWindow:
     )
     config = AppConfig()
     config.show_terminal = False  # keep the terminal collapsed for predictability
+    config.terminal.engine = "classic"  # these scenarios exercise the Qt terminal surface
     window = MainWindow(context=AppContext(config=config, state=state))
     window.show()
     QApplication.processEvents()
+    for pane in window.pane_views:
+        wait_for_pane(pane)
     return window
 
 
@@ -102,6 +107,7 @@ def _setup_split(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _row_for_path(pane, path: Path):
+    wait_for_pane(pane)
     for row in range(pane.file_list.topLevelItemCount()):
         item = pane.file_list.topLevelItem(row)
         if item.data(0, Qt.ItemDataRole.UserRole) == path:
@@ -210,6 +216,7 @@ def test_e2e_arrow_keys_move_cursor_in_active_pane(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
 
     QTest.keyClick(pane.file_list, Qt.Key.Key_Down)
@@ -349,6 +356,7 @@ def test_e2e_type_to_jump_moves_cursor_to_first_match(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.file_list.setCurrentItem(pane.file_list.topLevelItem(0))
 
     QTest.keyClick(pane.file_list, Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier)
@@ -365,6 +373,7 @@ def test_e2e_ctrl_s_reveals_filter_bar(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     assert pane._quick_filter_bar.isVisible() is False
 
     QTest.keyClick(window, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
@@ -414,6 +423,7 @@ def test_e2e_f2_renames_file_and_ctrl_z_reverts(tmp_path: Path, monkeypatch) -> 
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.file_list.setCurrentItem(_row_for_path(pane, src))
 
     # F2 opens TextEntryDialog modal; monkeypatch to auto-accept with new name.
@@ -450,6 +460,7 @@ def test_e2e_f5_copies_marked_file_to_passive_pane(tmp_path: Path, monkeypatch) 
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.marked_paths = {src}
 
     # The transfer dialog is modal — short-circuit it to "accepted" with no overrides.
@@ -490,6 +501,7 @@ def test_e2e_shift_f8_permanent_delete_unlinks_file(tmp_path: Path, monkeypatch)
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.marked_paths = {target}
 
     monkeypatch.setattr("multipane_commander.ui.main_window.ask_confirmation", lambda **_kwargs: True)
@@ -546,11 +558,13 @@ def test_e2e_enter_on_zip_browses_contents(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     item = _row_for_path(pane, archive)
     pane.file_list.setCurrentItem(item)
 
     # Activate (Enter) on the zip — exercises the same code path itemActivated does.
     pane._activate_item(item)
+    wait_for_pane(pane)
     QApplication.processEvents()
 
     # Pane is now "inside" the archive — listing should show its entries.
@@ -582,7 +596,9 @@ def test_e2e_enter_zip_subdir_then_parent_returns_to_root(tmp_path: Path) -> Non
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane._activate_item(_row_for_path(pane, archive))
+    wait_for_pane(pane)
     QApplication.processEvents()
 
     # Step into the subdirectory.
@@ -609,7 +625,9 @@ def test_e2e_f5_extracts_file_from_zip_to_passive_pane(tmp_path: Path, monkeypat
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane._activate_item(_row_for_path(pane, archive))
+    wait_for_pane(pane)
     QApplication.processEvents()
 
     # Mark the inner file so the transfer picks it up.
@@ -658,7 +676,9 @@ def test_e2e_f3_quick_view_on_file_inside_zip(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane._activate_item(_row_for_path(pane, archive))
+    wait_for_pane(pane)
     QApplication.processEvents()
 
     # Cursor on the inner file → trigger quick view.
@@ -693,13 +713,16 @@ def test_e2e_pane_uses_archive_fs_when_inside_archive(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     assert isinstance(pane.fs, LocalFileSystem)
 
     pane._activate_item(_row_for_path(pane, archive))
+    wait_for_pane(pane)
     QApplication.processEvents()
     assert isinstance(pane.fs, ArchiveFileSystem)
 
     pane.navigate_to(left)
+    wait_for_pane(pane)
     QApplication.processEvents()
     assert isinstance(pane.fs, LocalFileSystem)
 
@@ -713,6 +736,7 @@ def test_e2e_ctrl_shift_r_toggles_quick_view_raw_mode(tmp_path: Path) -> None:
     window = _make_main_window(left, right)
     active = window.pane_views[0]
     active.refresh()
+    wait_for_pane(active)
     # Cursor on the markdown file in the active pane.
     item = _row_for_path(active, md)
     active.file_list.setCurrentItem(item)
@@ -770,6 +794,7 @@ def test_e2e_ctrl_m_renames_via_template_and_pushes_undo(tmp_path: Path, monkeyp
     window = _make_main_window(left, right)
     pane = window.pane_views[0]
     pane.refresh()
+    wait_for_pane(pane)
     pane.marked_paths = {a, b}
 
     from multipane_commander.ui import multi_rename_dialog as mr_mod
@@ -796,5 +821,11 @@ def test_e2e_ctrl_m_renames_via_template_and_pushes_undo(tmp_path: Path, monkeyp
     assert (left / "renamed_2.txt").exists()
     assert not (left / "old1.txt").exists()
     assert not (left / "old2.txt").exists()
-    assert len(window.undo_stack) == 2
+    assert len(window.undo_stack) == 1
+    window._undo_last_operation()
+    assert (left / "old1.txt").exists()
+    assert (left / "old2.txt").exists()
+    assert not (left / "renamed_1.txt").exists()
+    assert not (left / "renamed_2.txt").exists()
+    assert len(window.undo_stack) == 0
     _close_window(window)

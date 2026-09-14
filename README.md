@@ -42,7 +42,7 @@ Beyond the basics:
 | `Alt+F1` / `Alt+F2` | Drive menu for active / passive pane |
 | `Alt+F7` | Find files (glob name + content search) |
 | `Ctrl+M` | Multi-rename (`[N]`, `[E]`, `[C]`, `[C0n]` tokens, live preview) |
-| `Ctrl+Z` | Undo last rename (stack capped at 50) |
+| `Ctrl+Z` | Undo last rename, multi-rename batch, or move (50 operations per session) |
 | `Shift+F8` / `Shift+Del` | Permanent delete (bypass Recycle Bin) |
 | `Ctrl+Enter` / `Alt+Enter` | Paste cursor name / full path into the terminal |
 | `Alt+Arrow` | Focus pane in that direction |
@@ -55,12 +55,18 @@ The full keymap and design rationale live in [SPEC.md §14](SPEC.md).
 ## Highlights
 
 - **Quick View (F3)** with first-class renderers for Markdown, HTML (with optional `QWebEngineView` "Web" mode), PDF, SVG, image (incl. `.tiff`/`.ico`/`.heic`), CSV/TSV (sortable table), audio/video (`QMediaPlayer`, no autoplay), archives (`.zip` / `.tar.*` / `.7z` / `.rar` / `.jar`), syntax-highlighted source via Pygments, and a hex dump fallback for binaries. A "Raw" toggle (`Ctrl+Shift+R` or the header button) flips any rich renderer back to the underlying source.
-- **Read-only archive browsing** — `Enter` on a `.zip` / `.tar.*` / `.7z` / `.rar` / `.jar` enters the archive as if it were a directory. F5 from inside an archive extracts to the destination on the local filesystem.
+- **Read-only archive browsing** — `Enter` on a `.zip` / `.tar.*` / `.7z` / `.rar` / `.jar` enters the archive as if it were a directory. F5 from inside an archive extracts files or complete folder trees to the local filesystem. Copying or moving the archive itself transfers the original archive file.
+- **Deep Terminal** (default) — an xterm.js terminal over a real PTY (ConPTY/WinPTY on Windows, POSIX PTY on macOS/Linux) with coalesced output for low CPU under heavy logs, prompt-aware directory following, live search (`Ctrl+F`), clickable links, font zoom (`Ctrl+=`/`Ctrl+-`), proper copy/paste, a pinnable command history panel, and crash-safe auto-restart. The original Qt **Classic Terminal** remains available from **Layout (F11) → Terminal Engine**.
 - **Embedded terminal** that follows the active pane's directory by default.
 - **Custom marking model** — `Insert`/`Space` toggle marks (separate from cursor selection) so multi-file ops compose naturally with cursor movement.
 - **Find Files** with glob name patterns + optional case-insensitive content search; binary files skipped via NUL-byte sniff; results capped at 5 000.
 - **Multi-Rename dialog** with live preview and collision detection.
-- **Real undo** for rename operations.
+- **Undo** for renames, grouped multi-renames, and successful moves, including restoring the previous destination after a move/overwrite. A failed undo remains available for retry. History lasts for the current session and holds up to 50 operations.
+- **Background browsing and search** with incremental list rendering, streamed search results, a Stop button, and visible-image thumbnail loading.
+- **Automatic folder refresh** preserves cursor, marks, filter, and scroll position after external changes. Native directory notifications are backed by periodic checks while the pane is visible.
+- **Transfer progress** shows action counts plus bytes, speed, and estimated time remaining for the current item. Cancellation checks run between copy blocks and archive members. Closing the app requests cancellation and waits for active file jobs to finish safely.
+
+Copy and extraction stage output before replacing an existing destination. Moves retain the previous destination in a sibling `.mpc-bak` file while undo is available; those backups are removed when history expires or the app closes normally. Recovery copies may remain after an interrupted process or failed cleanup. Once a cross-volume move has committed its destination, source cleanup finishes without cancellation to avoid leaving a half-deleted source.
 
 ## Architecture
 
@@ -74,7 +80,8 @@ src/multipane_commander/
 │   ├── multi_rename_dialog.py  Ctrl+M
 │   ├── find_files_dialog.py    Alt+F7
 │   ├── folder_browser.py     Tree sidebar
-│   ├── terminal_dock.py      Embedded terminal
+│   ├── terminal_dock.py      Classic embedded terminal
+│   ├── deep_terminal/        Deep Terminal — dock, xterm.js surface, engine picker
 │   └── themes.py             Palette, QSS
 ├── services/
 │   ├── fs/local_fs.py        LocalFileSystem
@@ -82,6 +89,9 @@ src/multipane_commander/
 │   ├── jobs/                 Background copy/move/delete via QThread
 │   ├── bookmarks.py
 │   └── undo.py               UndoStack (LIFO, capacity 50)
+├── terminal/
+│   ├── deep/                 Deep Terminal — PTY backends, shell-integration parser, session
+│   └── …                     Classic backend/session/ANSI buffer
 ├── state/                    Per-tab state, persistence
 └── platform/                 Platform-specific helpers (root paths, etc.)
 ```
@@ -100,6 +110,8 @@ pytest tests/test_keyboard_shortcuts.py
 # End-to-end scenarios (real MainWindow over a synthetic AppContext)
 pytest tests/test_e2e_scenarios.py
 ```
+
+GitHub Actions runs Ruff and pytest on Windows, Linux, and macOS with Python 3.12, plus Windows with Python 3.13. Cross-platform CI results are available after a push or pull request.
 
 Tests run headless via `QT_QPA_PLATFORM=offscreen` (no display server needed). The keyboard suite is regression-first: `R1`–`R13` cover the keys that already worked when this work began, and `F*` tests cover each new binding.
 

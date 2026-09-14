@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ui_wait import wait_until
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
@@ -108,6 +110,7 @@ def test_find_files_enter_on_result_still_opens_result(tmp_path: Path) -> None:
 
     QTest.keyClick(dialog._name_input, Qt.Key.Key_Return)
     app.processEvents()
+    wait_until(lambda: not dialog._tasks.is_running("search"))
     assert dialog._results_list.count() == 1
 
     dialog._results_list.setCurrentRow(0)

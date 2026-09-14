@@ -111,6 +111,7 @@ def load_config() -> AppConfig:
             bookmarked_commands=_string_list(terminal_payload.get("bookmarked_commands", [])),
             history_panel_visible=_safe_bool(terminal_payload.get("history_panel_visible"), False),
             experimental_pty=_safe_bool(terminal_payload.get("experimental_pty"), False),
+            engine=_terminal_engine(terminal_payload.get("engine")),
         ),
         ai=AiConfig(
             enabled=_safe_bool(ai_payload.get("enabled"), True),
@@ -141,6 +142,14 @@ def _safe_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
     return default
+
+
+def _terminal_engine(value: object) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"deep", "classic"}:
+            return normalized
+    return "deep"
 
 
 def _string_list(value: object) -> list[str]:
@@ -186,6 +195,7 @@ def save_config(config: AppConfig) -> None:
             "bookmarked_commands": config.terminal.bookmarked_commands,
             "history_panel_visible": config.terminal.history_panel_visible,
             "experimental_pty": config.terminal.experimental_pty,
+            "engine": config.terminal.engine,
         },
         "ai": {
             "enabled": config.ai.enabled,

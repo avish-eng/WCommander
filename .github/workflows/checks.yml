@@ -1,0 +1,51 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ['3.12']
+        include:
+          - os: windows-latest
+            python: '3.13'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --no-sandbox --disable-gpu
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-dev libegl1 libopengl0 libxkbcommon0 libnss3 libasound2t64
+      - name: Install macOS archive runtime
+        if: runner.os == 'macOS'
+        run: |
+          brew install libarchive
+          echo "LIBARCHIVE=$(brew --prefix libarchive)/lib/libarchive.dylib" >> "$GITHUB_ENV"
+      - name: Configure Windows archive runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"LIBARCHIVE=$env:SystemRoot\System32\archiveint.dll" >> $env:GITHUB_ENV'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check src tests
+      - run: python -m pytest -q --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.os }}-${{ matrix.python }}
+          path: test-results.xml

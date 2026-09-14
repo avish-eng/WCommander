@@ -199,9 +199,12 @@ Computes recursive size and updates the Size column. Synchronous, capped at 50 0
 
 ### Embedded terminal — `F9` (alias `Ctrl+\``)
 
-A real PTY-backed shell, docked at the bottom of the window.
+A real PTY-backed shell, docked at the bottom of the window. Two engines ship with the app and can be swapped from **Layout (F11) → Terminal Engine**:
 
-- **Follow active pane** is on by default — pane navigation issues a `cd` so the terminal tracks the active pane's directory. Toggle off any time to let the two diverge.
+- **Deep Terminal** (default) — xterm.js rendering over ConPTY / WinPTY (Windows) or a POSIX PTY (macOS/Linux). Coalesced output, live search, clickable links, font zoom, mouse-friendly copy/paste, command history panel, and crash-safe auto-restart.
+- **Classic Terminal** — the original Qt widget surface, kept as a fallback for machines without Qt WebEngine.
+
+- **Follow active pane** is on by default — pane navigation issues a `cd` so the terminal tracks the active pane's directory. Directory changes are only injected when the shell is idle, so a running program is never interrupted. The terminal also listens to shell-integration sequences (OSC 7/9;9/133) when your shell emits them and skips redundant `cd`s.
 - Showing the terminal moves focus to it, so `F9` doubles as "focus terminal" once it's open.
 
 | Key | Action |
@@ -211,6 +214,13 @@ A real PTY-backed shell, docked at the bottom of the window.
 | `Ctrl+Enter` | Paste the cursor item's **name** into the terminal (quoted if needed) |
 | `Alt+Enter` | Paste the cursor item's **full path** into the terminal |
 | `Ctrl+Shift+K` | Force-kill the program currently running in the terminal |
+| `Ctrl+F` | Search terminal output (Deep Terminal; `Enter`/`Shift+Enter` cycle matches) |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Font zoom (Deep Terminal) |
+| `Ctrl+Insert` / `Shift+Insert` | Copy / paste (Deep Terminal) |
+| `Ctrl+C` | Copy when text is selected, otherwise send interrupt |
+| `Ctrl+V` | Paste into the terminal |
+
+Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart. The **History** button opens the commands panel: double-click to run, `Enter` to load, and the context menu pins, unpins or clears entries.
 
 ### Command bar — `Ctrl+G`
 

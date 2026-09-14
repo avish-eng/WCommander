@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileInfo, QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFont, QIcon, QKeySequence, QPixmap
+from PySide6.QtCore import QEvent, QSignalBlocker, QFileSystemWatcher, QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFont, QIcon, QKeySequence, QPixmap, QImageReader
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -32,6 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from multipane_commander.services.ai.cache import has_summary as _has_ai_summary
+from multipane_commander.services.background import BackgroundTasks
+from multipane_commander.services.navigation import ensure_history, record_navigation, resolve_typed_path
+from multipane_commander.services.fs.local_fs import OperationCancelled
 from multipane_commander.services.bookmarks import BookmarkStore
 from multipane_commander.domain.entries import EntryInfo
 from multipane_commander.state.model import PaneState, TabState
@@ -46,6 +50,7 @@ from multipane_commander.ui.quick_view import QuickViewWidget
 from multipane_commander.ui.themes import ThemePalette, build_palette, builtin_themes
 
 _INTERNAL_DRAG_MIME_TYPE = "application/x-multipane-commander-paths"
+_PATH_EDIT_HIT_WIDTH = 28
 
 
 def build_file_drag_mime_data(source_paths: list[Path]) -> QMimeData:
@@ -184,12 +189,33 @@ class PaneView(QFrame):
         self._local_fs = LocalFileSystem()
         self._archive_fs = ArchiveFileSystem()
         self.fs = self._local_fs
+        self._tasks = BackgroundTasks(self)
+        self._tasks.finished.connect(self._background_finished)
+        self._displayed_path = None
+        self._directory_cache = OrderedDict()
+        self._render_generation = 0
+        self._rendering = False
+        self._thumbnail_cache = {}
+        self._entry_icons: dict[bool, QIcon] = {}
+        self._thumbnail_pending = set()
+        self._watcher = QFileSystemWatcher(self)
+        self._watch_timer = QTimer(self)
+        self._watch_timer.setSingleShot(True)
+        self._watch_timer.setInterval(250)
+        self._watch_timer.timeout.connect(self._auto_refresh)
+        self._watcher.directoryChanged.connect(lambda _: self._watch_timer.start())
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(3000)
+        self._poll_timer.timeout.connect(self._auto_refresh)
+        self._poll_timer.start()
         self._quick_view_temp_path: Path | None = None
         self.bookmark_store = bookmark_store
         self.icon_provider = QFileIconProvider()
         self.marked_paths: set[Path] = set()
         self.file_list = QTreeWidget()
         self.thumbnail_list = QListWidget()
+        self.thumbnail_list.verticalScrollBar().valueChanged.connect(
+            lambda _: QTimer.singleShot(0, self._load_visible_thumbnails))
         self.status = QLabel()
         self.summary_chip = QLabel()
         self.selection_chip = QLabel()
@@ -238,6 +264,15 @@ class PaneView(QFrame):
         self._quick_filter_bar.setVisible(False)
         self._quick_filter_bar.textChanged.connect(self._apply_quick_filter)
         self._quick_filter_bar.installEventFilter(self)
+        self._path_edit_active = False
+        self._last_breadcrumb: QWidget | None = None
+        self.path_editor = QLineEdit()
+        self.path_editor.setObjectName("panePathEditor")
+        self.path_editor.setPlaceholderText("Type a folder path (Esc to cancel)")
+        self.path_editor.setVisible(False)
+        self.path_editor.returnPressed.connect(self._commit_path_edit)
+        self.path_editor.textEdited.connect(self._clear_path_edit_error)
+        self.path_editor.installEventFilter(self)
         self.theme_palette = build_palette(builtin_themes()[0])
         self._thumbnail_size_presets = {
             "Small": {"icon": QSize(96, 72), "grid": QSize(122, 124)},
@@ -271,6 +306,11 @@ class PaneView(QFrame):
         self.breadcrumb_host.setObjectName("breadcrumbHost")
         self.breadcrumb_layout.setContentsMargins(8, 3, 8, 3)
         self.breadcrumb_layout.setSpacing(2)
+        # The empty stretch to the right of the crumbs doubles as a click
+        # target that swaps the breadcrumbs for an editable path field.
+        self.breadcrumb_host.setToolTip("Click to the right of the path to type a path")
+        self.breadcrumb_host.setCursor(Qt.CursorShape.IBeamCursor)
+        self.breadcrumb_host.installEventFilter(self)
         self.folder_browser_toggle.setObjectName("paneToolButton")
         self.folder_browser_toggle.setCheckable(True)
         self.folder_browser_toggle.setIcon(
@@ -280,8 +320,10 @@ class PaneView(QFrame):
         self.folder_browser_toggle.clicked.connect(self._toggle_folder_browser)
         self.back_button.setObjectName("breadcrumbNavButton")
         self.back_button.setToolTip("Back")
+        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.back_button.clicked.connect(self._navigate_back)
         self.bookmark_toggle.setObjectName("breadcrumbBookmarkButton")
+        self.bookmark_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.bookmark_toggle.clicked.connect(self._toggle_bookmark)
         self.thumbnail_toggle.setObjectName("paneToolButton")
         self.thumbnail_toggle.setIcon(
@@ -383,6 +425,7 @@ class PaneView(QFrame):
 
         layout.addLayout(header_row)
         layout.addWidget(self.breadcrumb_host)
+        layout.addWidget(self.path_editor)
         layout.addWidget(self._quick_filter_bar)
         layout.addWidget(self.content_stack, 1)
         layout.addLayout(status_row)
@@ -507,6 +550,7 @@ class PaneView(QFrame):
 
     def set_thumbnail_mode_enabled(self, enabled: bool) -> None:
         current_path = self.preview_path()
+        changed = self.thumbnail_mode_enabled != enabled
         self.thumbnail_mode_enabled = enabled
         self.pane_state.thumbnail_mode_enabled = enabled
         self.browser_stack.setCurrentWidget(self.thumbnail_list if enabled else self.file_list)
@@ -523,6 +567,10 @@ class PaneView(QFrame):
             "Switch to detailed list" if enabled else "Switch to thumbnail grid"
         )
         self.thumbnail_size_picker.setEnabled(enabled)
+        if changed:
+            self._rebuild_file_views(self.current_directory(), on_finished=lambda: (
+                self._set_current_path(current_path) if current_path else self._focus_first_entry(),
+                self._update_status(), self._load_visible_thumbnails()))
         self.thumbnail_toggle.style().unpolish(self.thumbnail_toggle)
         self.thumbnail_toggle.style().polish(self.thumbnail_toggle)
         self.thumbnail_toggle.update()
@@ -552,6 +600,7 @@ class PaneView(QFrame):
         self.thumbnail_list.setIconSize(preset["icon"])
         self.thumbnail_list.setGridSize(preset["grid"])
 
+        QTimer.singleShot(0, self._load_visible_thumbnails)
         current_path = self.preview_path()
         for row in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(row)
@@ -643,77 +692,190 @@ class PaneView(QFrame):
     def refresh(self) -> None:
         current_path = self.active_tab.path
         self._ensure_tab_history(self.active_tab)
-        # Switch the active filesystem based on whether we're inside an archive.
-        in_archive = inside_archive(current_path) is not None
-        self.fs = self._archive_fs if in_archive else self._local_fs
-        if in_archive:
-            preserved_marks = {
-                path for path in self.marked_paths if path.parent == current_path
-            }
-        else:
-            preserved_marks = {
-                path for path in self.marked_paths
-                if path.parent == current_path and path.exists()
-            }
-        self.marked_paths = preserved_marks
-        preserved_current_path = self.preview_path()
         self._rebuild_tab_strip()
         self._rebuild_breadcrumbs(current_path)
-
-        try:
-            self._current_entries = self.fs.list_dir(current_path)
-        except OSError as exc:
-            self._current_entries = []
-            self._rebuild_file_views(current_path)
-            error_item = QTreeWidgetItem([f"Unable to open directory: {exc}", "Error", "", ""])
-            error_item.setFlags(error_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self.file_list.addTopLevelItem(error_item)
-            self.status.setText("directory open failed")
-            return
-
-        self._rebuild_file_views(current_path)
-
-        self.summary_chip.setText(f"{len(self._current_entries):,} items")
-
-        if self.file_list.topLevelItemCount() > 0:
-            if preserved_current_path is not None:
-                self._set_current_path(preserved_current_path)
-            else:
-                self._focus_first_entry()
-        else:
-            self.status.setText("empty directory")
-        self._update_status()
-        self._refresh_row_styles()
-        self._update_bookmark_button()
         self._update_navigation_buttons()
-        self.current_directory_changed.emit(current_path)
+        self.status.setText("Loading…")
+        if self._displayed_path != current_path:
+            self._remember_directory()
+            self._render_generation += 1
+            self._rendering = False
+            self.file_list.blockSignals(False)
+            self.thumbnail_list.blockSignals(False)
+            self.file_list.clear()
+            self.thumbnail_list.clear()
+            self._current_entries = []
+            self.marked_paths.clear()
+            self.current_path_changed.emit(None)
+            self.current_directory_changed.emit(current_path)
+            cached = self._directory_cache.get(current_path)
+            if cached is not None:
+                self._background_finished("directory", (current_path, cached[0], cached[1]), None)
 
-    def _rebuild_file_views(self, current_path: Path) -> None:
+        def read_directory(token, publish):
+            def check():
+                if token.is_set():
+                    raise OperationCancelled()
+            check()
+            archive = inside_archive(current_path)
+            fs = ArchiveFileSystem(check_cancel=check) if archive else LocalFileSystem(check_cancel=check)
+            entries = fs.list_dir(current_path)
+            check()
+            return current_path, entries, bool(archive)
+        self._tasks.submit("directory", read_directory)
+
+    def _remember_directory(self) -> None:
+        if self._displayed_path is None or self._rendering:
+            return
+        path = self._displayed_path
+        self._directory_cache[path] = (
+            self._current_entries, self.fs is self._archive_fs, self.preview_path(),
+            (self.file_list.verticalScrollBar().value(),
+             self.thumbnail_list.verticalScrollBar().value()),
+        )
+        self._directory_cache.move_to_end(path)
+        while len(self._directory_cache) > 8 or sum(
+            len(snapshot[0]) for snapshot in self._directory_cache.values()
+        ) > 10_000:
+            self._directory_cache.popitem(last=False)
+
+    def _auto_refresh(self) -> None:
+        if (self.isVisible() and not self._path_edit_active and not self._rendering
+                and not self._tasks.is_running("directory")):
+            self.refresh()
+
+    def stop_background_tasks(self) -> None:
+        self._tasks.cancel_all()
+        self._poll_timer.stop()
+        self._watch_timer.stop()
+        self._render_generation += 1
+        self._rendering = False
+
+    def closeEvent(self, event):
+        self.stop_background_tasks()
+        super().closeEvent(event)
+
+    def _background_finished(self, key, result, error) -> None:
+        if key.startswith("thumbnail:"):
+            self._thumbnail_pending.discard(key)
+            if not error and result:
+                path, cache_key, image = result
+                icon = QIcon(QPixmap.fromImage(image)) if not image.isNull() else QIcon()
+                self._thumbnail_cache[cache_key] = icon
+                if len(self._thumbnail_cache) > 256:
+                    self._thumbnail_cache.pop(next(iter(self._thumbnail_cache)))
+                for row in range(self.thumbnail_list.count()):
+                    item = self.thumbnail_list.item(row)
+                    if item.data(Qt.ItemDataRole.UserRole) == path and not icon.isNull():
+                        item.setIcon(icon)
+            QTimer.singleShot(0, self._load_visible_thumbnails)
+            return
+        if key.startswith("size:"):
+            if not error and result:
+                path, size, capped = result
+                for row in range(self.file_list.topLevelItemCount()):
+                    item = self.file_list.topLevelItem(row)
+                    if item.data(0, Qt.ItemDataRole.UserRole) == path:
+                        item.setText(2, self._format_size(size) + (" (capped)" if capped else ""))
+                        item.setData(0, Qt.ItemDataRole.UserRole + 2, size)
+            return
+        if key != "directory":
+            return
+        if error:
+            if not isinstance(error, OperationCancelled):
+                self._directory_cache.pop(self.current_directory(), None)
+                self._render_generation += 1
+                self._rendering = False
+                self._current_entries = []
+                self._displayed_path = None
+                self.file_list.blockSignals(False)
+                self.thumbnail_list.blockSignals(False)
+                self.file_list.clear()
+                self.thumbnail_list.clear()
+                self.marked_paths.clear()
+                self.summary_chip.setText("0 items")
+                self.status.setText(f"Unable to open directory: {error}")
+            return
+        path, entries, in_archive = result
+        if path != self.current_directory():
+            return
+        self.fs = self._archive_fs if in_archive else self._local_fs
+        same_path = self._displayed_path == path
+        if same_path and entries == self._current_entries:
+            self._update_status()
+            return
+        current = self.preview_path() if same_path else None
+        scroll = (self.file_list.verticalScrollBar().value(),
+                  self.thumbnail_list.verticalScrollBar().value()) if same_path else (0, 0)
+        if not same_path and path in self._directory_cache:
+            snapshot = self._directory_cache[path]
+            current, scroll = snapshot[2], snapshot[3]
+        self._current_entries = entries
+        self._displayed_path = path
+        self.marked_paths.intersection_update(entry.path for entry in entries)
+        self._thumbnail_cache.clear()
+        for key in self._thumbnail_pending:
+            self._tasks.cancel(key)
+        self._thumbnail_pending.clear()
+        watched = self._watcher.directories()
+        if watched:
+            self._watcher.removePaths(watched)
+        watch_path = inside_archive(path)[0].parent if in_archive else path
+        self._watcher.addPaths(list({str(watch_path), str(watch_path.parent)}))
+
+        def finish():
+            with QSignalBlocker(self.file_list), QSignalBlocker(self.thumbnail_list):
+                if current is not None:
+                    self._set_current_path(current)
+                if self.preview_path() is None:
+                    self._focus_first_entry()
+            self._apply_quick_filter(self._quick_filter_text)
+            self.file_list.verticalScrollBar().setValue(scroll[0])
+            self.thumbnail_list.verticalScrollBar().setValue(scroll[1])
+            self.summary_chip.setText(f"{len(entries):,} items")
+            self._update_status()
+            self._update_bookmark_button()
+            self._remember_directory()
+            QTimer.singleShot(0, self._load_visible_thumbnails)
+        self._rebuild_file_views(path, on_finished=finish)
+
+    def _rebuild_file_views(self, current_path: Path, *, on_finished=None) -> None:
+        self._render_generation += 1
+        generation = self._render_generation
+        self._rendering = True
+        self.file_list.blockSignals(True)
+        self.thumbnail_list.blockSignals(True)
         self.file_list.clear()
         self.thumbnail_list.clear()
-
         if current_path.parent != current_path:
             parent_item = QTreeWidgetItem(["..", "Parent", "", ""])
             parent_item.setData(0, Qt.ItemDataRole.UserRole, current_path.parent)
             parent_item.setData(0, Qt.ItemDataRole.UserRole + 1, "parent")
             parent_item.setData(0, Qt.ItemDataRole.UserRole + 3, "parent")
-            parent_item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogToParent))
-            parent_item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.file_list.addTopLevelItem(parent_item)
-            self.thumbnail_list.addItem(
-                self._build_thumbnail_item(path=current_path.parent, is_dir=True, size=0, modified_text="Parent")
-            )
-
-        for entry in self._sorted_entries(self._current_entries):
-            self.file_list.addTopLevelItem(self._build_tree_item(entry))
-            self.thumbnail_list.addItem(
-                self._build_thumbnail_item(
-                    path=entry.path,
-                    is_dir=entry.is_dir,
-                    size=entry.size,
-                    modified_text=entry.modified_at.strftime("%Y-%m-%d %H:%M"),
-                )
-            )
+            if self.thumbnail_mode_enabled:
+                self.thumbnail_list.addItem(self._build_thumbnail_item(
+                    path=current_path.parent, is_dir=True, size=0, modified_text="Parent"))
+        entries = iter(self._sorted_entries(self._current_entries))
+        def append_batch():
+            if generation != self._render_generation:
+                return
+            for _ in range(200):
+                entry = next(entries, None)
+                if entry is None:
+                    self._rendering = False
+                    self.file_list.blockSignals(False)
+                    self.thumbnail_list.blockSignals(False)
+                    if on_finished:
+                        on_finished()
+                    return
+                self.file_list.addTopLevelItem(self._build_tree_item(entry))
+                if self.thumbnail_mode_enabled:
+                    self.thumbnail_list.addItem(self._build_thumbnail_item(
+                        path=entry.path, is_dir=entry.is_dir, size=entry.size,
+                        modified_text=entry.modified_at.strftime("%Y-%m-%d %H:%M")))
+            QTimer.singleShot(0, append_batch)
+        append_batch()
 
     def _sort_by_header(self, column: int) -> None:
         if column not in {0, 1, 2, 3}:
@@ -772,7 +934,7 @@ class PaneView(QFrame):
         item.setData(0, Qt.ItemDataRole.UserRole + 1, "entry")
         item.setData(0, Qt.ItemDataRole.UserRole + 2, entry.size)
         item.setData(0, Qt.ItemDataRole.UserRole + 3, "dir" if entry.is_dir else "file")
-        item.setIcon(0, self.icon_provider.icon(QFileInfo(str(entry.path))))
+        item.setIcon(0, self._thumbnail_icon(entry.path, is_dir=entry.is_dir))
         return item
 
     def _build_thumbnail_item(
@@ -798,17 +960,58 @@ class PaneView(QFrame):
         return item
 
     def _thumbnail_icon(self, path: Path, *, is_dir: bool) -> QIcon:
-        if not is_dir and path.suffix.lower() in self._image_suffixes:
-            pixmap = QPixmap(str(path))
-            if not pixmap.isNull():
-                return QIcon(
-                    pixmap.scaled(
-                        self.thumbnail_list.iconSize(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-        return self.icon_provider.icon(QFileInfo(str(path)))
+        # Windows standardIcon can take several milliseconds even for these
+        # generic icons. Resolve each once instead of querying it for every row.
+        if is_dir not in self._entry_icons:
+            self._entry_icons[is_dir] = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_DirIcon if is_dir else QStyle.StandardPixmap.SP_FileIcon)
+        return self._entry_icons[is_dir]
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.Type.StyleChange and hasattr(self, "_entry_icons"):
+            self._entry_icons.clear()
+        super().changeEvent(event)
+
+    def _load_visible_thumbnails(self) -> None:
+        if not self.thumbnail_mode_enabled or self._rendering or not self.isVisible():
+            return
+        viewport = self.thumbnail_list.viewport().rect()
+        for row in range(self.thumbnail_list.count()):
+            item = self.thumbnail_list.item(row)
+            if item.isHidden() or not viewport.intersects(self.thumbnail_list.visualItemRect(item)):
+                continue
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(path, Path) or path.suffix.lower() not in self._image_suffixes:
+                continue
+            size = self.thumbnail_list.iconSize()
+            cache_key = (path, size.width(), size.height(),
+                         item.data(Qt.ItemDataRole.UserRole + 2),
+                         item.data(Qt.ItemDataRole.UserRole + 4))
+            if cache_key in self._thumbnail_cache:
+                icon = self._thumbnail_cache[cache_key]
+                if not icon.isNull():
+                    item.setIcon(icon)
+                continue
+            key = "thumbnail:" + str(path)
+            if key in self._thumbnail_pending:
+                continue
+            if len(self._thumbnail_pending) >= 4:
+                break
+            self._thumbnail_pending.add(key)
+            def decode(token, publish, path=path, cache_key=cache_key, size=size):
+                if token.is_set():
+                    raise OperationCancelled()
+                reader = QImageReader(str(path))
+                reader.setAutoTransform(True)
+                source_size = reader.size()
+                if source_size.isValid():
+                    reader.setScaledSize(source_size.scaled(size, Qt.AspectRatioMode.KeepAspectRatio))
+                return path, cache_key, reader.read()
+            self._tasks.submit(key, decode)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._load_visible_thumbnails)
 
     def _focus_first_entry(self) -> None:
         if self.file_list.topLevelItemCount() == 0:
@@ -1175,6 +1378,19 @@ class PaneView(QFrame):
                     )
                     event.acceptProposedAction()
                     return True
+        if watched is self.breadcrumb_host and event.type() == QEvent.Type.MouseButtonPress:
+            if (
+                event.button() == Qt.MouseButton.LeftButton
+                and self._is_path_edit_hotspot(event.position().toPoint())
+            ):
+                self.begin_path_edit()
+                return True
+        if watched is self.path_editor:
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                self.cancel_path_edit()
+                return True
+            if event.type() == QEvent.Type.FocusOut:
+                self.cancel_path_edit()
         if watched is self._quick_filter_bar and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Escape:
                 self.hide_quick_filter(clear=True)
@@ -1458,25 +1674,19 @@ class PaneView(QFrame):
         self._update_status()
 
     def _compute_and_apply_dir_size(self, item, path: Path) -> None:
-        """Compute total bytes under `path` and update the size column.
-
-        v1: synchronous walk capped at 50 000 entries so we never hang the
-        UI on pathological trees. For trees over the cap the column shows
-        "(>50k items)" instead of a number. Move to QThreadPool when we
-        have a baseline for typical sizes.
-        """
-        size, capped = self._dir_size_with_cap(path, cap=50_000)
         if isinstance(item, QTreeWidgetItem):
-            label = self._format_size(size) + (" (capped)" if capped else "")
-            item.setText(2, label)
-            item.setData(0, Qt.ItemDataRole.UserRole + 2, size)
+            item.setText(2, "Calculating…")
+        self._tasks.submit("size:" + str(path), lambda token, publish: (
+            path, *PaneView._dir_size_with_cap(path, cap=50_000, cancelled=token)))
 
     @staticmethod
-    def _dir_size_with_cap(root: Path, *, cap: int) -> tuple[int, bool]:
+    def _dir_size_with_cap(root: Path, *, cap: int, cancelled=None) -> tuple[int, bool]:
         total = 0
         seen = 0
         stack = [root]
         while stack:
+            if cancelled is not None and cancelled.is_set():
+                raise OperationCancelled()
             current = stack.pop()
             try:
                 with __import__("os").scandir(current) as it:
@@ -1543,6 +1753,78 @@ class PaneView(QFrame):
         self.bookmark_toggle.style().polish(self.bookmark_toggle)
         self.bookmark_toggle.update()
 
+    def _is_path_edit_hotspot(self, position: QPoint) -> bool:
+        """True for the empty strip right of the last path segment.
+
+        Only the tail of the row opens the editor. Everything left of the last
+        crumb is left alone, so a press on a *disabled* back button — which Qt
+        forwards to this parent widget rather than swallowing — keeps behaving
+        like a press on a dead button instead of starting an edit.
+        """
+        if self.breadcrumb_host.childAt(position) is not None:
+            return False
+        last_crumb = self._last_breadcrumb
+        if last_crumb is None:
+            return False
+        return position.x() > last_crumb.geometry().right()
+
+    def begin_path_edit(self) -> None:
+        """Swap the breadcrumb trail for an editable field holding the path."""
+        if self._path_edit_active:
+            self.path_editor.setFocus(Qt.FocusReason.MouseFocusReason)
+            return
+        self.activated.emit(self)
+        self._path_edit_active = True
+        self.breadcrumb_host.setVisible(False)
+        self.path_editor.setText(str(self.current_directory()))
+        self._clear_path_edit_error()
+        self.path_editor.setVisible(True)
+        self.path_editor.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.path_editor.selectAll()
+
+    def path_edit_active(self) -> bool:
+        return self._path_edit_active
+
+    def cancel_path_edit(self) -> None:
+        if not self._path_edit_active:
+            return
+        self._end_path_edit()
+        self.file_list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _end_path_edit(self) -> None:
+        self._path_edit_active = False
+        self.path_editor.setVisible(False)
+        self.breadcrumb_host.setVisible(True)
+        self._clear_path_edit_error()
+
+    def _commit_path_edit(self) -> None:
+        if not self._path_edit_active:
+            return
+        target = self._resolve_typed_path(self.path_editor.text())
+        if target is None:
+            self._flag_path_edit_error()
+            return
+        self._end_path_edit()
+        self.navigate_to(target)
+        self.file_list.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _resolve_typed_path(self, raw: str) -> Path | None:
+        return resolve_typed_path(raw, self.current_directory())
+
+    def _flag_path_edit_error(self) -> None:
+        self._set_path_edit_error(True)
+        self.path_editor.selectAll()
+
+    def _clear_path_edit_error(self, _text: str | None = None) -> None:
+        self._set_path_edit_error(False)
+
+    def _set_path_edit_error(self, invalid: bool) -> None:
+        if self.path_editor.property("invalid") == invalid:
+            return
+        self.path_editor.setProperty("invalid", invalid)
+        self.path_editor.style().unpolish(self.path_editor)
+        self.path_editor.style().polish(self.path_editor)
+
     def _rebuild_breadcrumbs(self, path: Path) -> None:
         while self.breadcrumb_layout.count():
             child = self.breadcrumb_layout.takeAt(0)
@@ -1555,12 +1837,15 @@ class PaneView(QFrame):
 
         self.breadcrumb_layout.addWidget(self.back_button)
         segments = self._path_segments(path)
+        self._last_breadcrumb = None
         for index, (label, segment_path) in enumerate(segments):
             button = QPushButton(label)
             button.setObjectName("breadcrumbButton")
             button.setProperty("current", index == len(segments) - 1)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _checked=False, p=segment_path: self.navigate_to(p))
             self.breadcrumb_layout.addWidget(button)
+            self._last_breadcrumb = button
 
             if index != len(segments) - 1:
                 separator = QLabel("›")
@@ -1568,22 +1853,16 @@ class PaneView(QFrame):
                 self.breadcrumb_layout.addWidget(separator)
 
         self.breadcrumb_layout.addStretch(1)
+        # A fixed gap before the bookmark button, so a deep path that fills the
+        # whole row still leaves somewhere to click to edit the path.
+        self.breadcrumb_layout.addSpacing(_PATH_EDIT_HIT_WIDTH)
         self.breadcrumb_layout.addWidget(self.bookmark_toggle)
 
     def _ensure_tab_history(self, tab: TabState) -> None:
-        if not tab.navigation_history:
-            tab.navigation_history = [tab.path]
-            tab.navigation_index = 0
-            return
-        tab.navigation_index = max(0, min(tab.navigation_index, len(tab.navigation_history) - 1))
+        ensure_history(tab)
 
     def _record_navigation(self, path: Path) -> None:
-        tab = self.active_tab
-        if tab.navigation_index < len(tab.navigation_history) - 1:
-            tab.navigation_history = tab.navigation_history[: tab.navigation_index + 1]
-        if not tab.navigation_history or tab.navigation_history[-1] != path:
-            tab.navigation_history.append(path)
-        tab.navigation_index = len(tab.navigation_history) - 1
+        record_navigation(self.active_tab, path)
 
     def _update_navigation_buttons(self) -> None:
         self.back_button.setEnabled(self.active_tab.navigation_index > 0)
@@ -1603,6 +1882,23 @@ class PaneView(QFrame):
         return segments
 
     def _refresh_row_styles(self) -> None:
+        # Per-cell FontRole signals cause repeated full ResizeToContents scans.
+        # Apply roles silently, then invalidate each view once. Also suppress
+        # QTreeWidget's currentItemChanged echo for edits to its current row.
+        tree_model, thumb_model = self.file_list.model(), self.thumbnail_list.model()
+        with QSignalBlocker(self.file_list), QSignalBlocker(self.thumbnail_list):
+            with QSignalBlocker(tree_model), QSignalBlocker(thumb_model):
+                tree_changed, thumb_changed = self._apply_row_styles()
+            roles = [Qt.ItemDataRole.FontRole, Qt.ItemDataRole.BackgroundRole,
+                     Qt.ItemDataRole.ForegroundRole]
+            for model, changed in ((tree_model, tree_changed), (thumb_model, thumb_changed)):
+                if changed and model.rowCount():
+                    model.dataChanged.emit(model.index(0, 0),
+                                           model.index(model.rowCount() - 1, model.columnCount() - 1),
+                                           roles)
+
+    def _apply_row_styles(self) -> tuple[bool, bool]:
+        tree_changed = thumb_changed = False
         palette = self.theme_palette
         current_item = self.file_list.currentItem()
         # QAbstractScrollArea redirects focus to its viewport via focusProxy,
@@ -1658,6 +1954,11 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_cut_pending_text)
                 font.setItalic(True)
 
+            style_key = (base_bg.rgba(), fg.rgba(), font.bold(), font.italic())
+            if item.data(0, Qt.ItemDataRole.UserRole + 5) == style_key:
+                continue
+            tree_changed = True
+            item.setData(0, Qt.ItemDataRole.UserRole + 5, style_key)
             for column in range(self.file_list.columnCount()):
                 item.setBackground(column, QBrush(base_bg))
                 item.setForeground(column, QBrush(fg))
@@ -1712,9 +2013,15 @@ class PaneView(QFrame):
                 fg = QColor(palette.row_cut_pending_text)
                 font.setItalic(True)
 
+            style_key = (base_bg.rgba(), fg.rgba(), font.bold(), font.italic())
+            if item.data(Qt.ItemDataRole.UserRole + 5) == style_key:
+                continue
+            thumb_changed = True
+            item.setData(Qt.ItemDataRole.UserRole + 5, style_key)
             item.setBackground(QBrush(base_bg))
             item.setForeground(QBrush(fg))
             item.setFont(font)
+        return tree_changed, thumb_changed
 
     def _mark_all_entries(self) -> None:
         self.marked_paths.clear()
