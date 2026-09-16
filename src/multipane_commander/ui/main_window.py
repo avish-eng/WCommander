@@ -40,7 +40,7 @@ from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.shortcuts import bind_window_shortcuts
 from multipane_commander.ui.jobs_view import JobsView
 from multipane_commander.ui.pane_view import PaneView
-from multipane_commander.ui.deep_terminal import (
+from multipane_commander.ui.deep_terminal.engine import (
     ENGINE_CLASSIC,
     ENGINE_DEEP,
     create_terminal_dock,
@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
             visible=self.context.config.show_terminal,
             follow_active_pane=self.context.config.follow_active_pane_terminal,
             experimental_pty=self.context.config.terminal.experimental_pty,
+            prefer_pty=self.context.config.terminal.prefer_pty,
             recent_commands=self.context.config.terminal.recent_commands,
             bookmarked_commands=self.context.config.terminal.bookmarked_commands,
             history_panel_visible=self.context.config.terminal.history_panel_visible,
@@ -364,9 +365,13 @@ class MainWindow(QMainWindow):
         self.command_bar.navigate_requested.connect(self._navigate_active_pane)
         self.command_bar.refresh_requested.connect(self._refresh_active_pane)
         self.command_bar.escalate_requested.connect(
-            lambda cwd, cmd: self.terminal_dock.inject_command(cwd, cmd)
+            self._run_command_bar_in_terminal
         )
         self.command_bar.set_cwd(self._active_pane().current_directory())
+
+    def _run_command_bar_in_terminal(self, cwd: str, command: str) -> None:
+        if self.terminal_dock.inject_command(cwd, command) and self.command_bar is not None:
+            self.command_bar.terminal_command_accepted(command)
 
     def _bind_job_signals(self) -> None:
         self.job_manager.job_changed.connect(self.jobs_view.upsert_snapshot)
@@ -388,51 +393,13 @@ class MainWindow(QMainWindow):
 
     def _set_terminal_engine(self, engine: str) -> None:
         resolved = resolve_engine(engine)
-        if resolved == self._terminal_engine:
+        if resolved == self.context.config.terminal.engine:
             return
-        current = self.terminal_dock
-        replacement = create_terminal_dock(
-            engine=resolved,
-            initial_directory=current._current_directory
-            if hasattr(current, "_current_directory")
-            else self._active_pane().current_directory(),
-            visible=current.isVisible(),
-            follow_active_pane=self.context.config.follow_active_pane_terminal,
-            experimental_pty=self.context.config.terminal.experimental_pty,
-            recent_commands=current.recent_commands(),
-            bookmarked_commands=current.bookmarked_commands(),
-            history_panel_visible=self.context.config.terminal.history_panel_visible,
-        )
-        self._connect_terminal_signals(replacement)
-        replacement.set_follow_active_pane(self.context.config.follow_active_pane_terminal)
-        replacement.set_history_panel_visible(
-            self.context.config.terminal.history_panel_visible,
-            emit=False,
-        )
-        replaced = False
-        if self.content_splitter is not None and self.content_splitter.widget(1) is current:
-            self.content_splitter.replaceWidget(1, replacement)
-            replaced = True
-        elif self.pane_splitter is not None:
-            index = self.pane_splitter.indexOf(current)
-            if index != -1:
-                self.pane_splitter.replaceWidget(index, replacement)
-                replacement.set_side_by_side_mode(True)
-                replaced = True
-        replacement.setVisible(current.isVisible())
-        if replaced and self.context.state.layout.terminal_maximized:
-            replacement.set_maximized(True)
-        self.terminal_dock = replacement
-        if hasattr(current, "close_session"):
-            current.close_session()
-        current.deleteLater()
-        self._terminal_engine = (
-            ENGINE_DEEP if type(replacement).__name__ == "DeepTerminalDock" else ENGINE_CLASSIC
-        )
-        self.context.config.terminal.engine = self._terminal_engine
-        self._update_terminal_tab_shortcuts()
-        self._update_layout_chip()
+        self.context.config.terminal.engine = resolved
         persist_app_context(self.context)
+        self.terminal_dock._show_action_status(
+            "Terminal mode saved for next launch; current session stays open"
+        )
 
     def _persist_bookmarks(self, bookmarks: list[Path]) -> None:
         self.context.state.bookmarks = bookmarks
@@ -457,6 +424,7 @@ class MainWindow(QMainWindow):
 
     def _persist_terminal_experimental_pty(self, enabled: bool) -> None:
         self.context.config.terminal.experimental_pty = enabled
+        self.context.config.terminal.prefer_pty = enabled
         persist_app_context(self.context)
 
     def _apply_selected_theme(self) -> None:
@@ -988,10 +956,10 @@ class MainWindow(QMainWindow):
         menu.addAction(toggle_commands_panel_action)
 
         menu.addSeparator()
-        engine_menu = menu.addMenu("Terminal Engine")
-        deep_engine_action = QAction("Deep Terminal", self)
+        engine_menu = menu.addMenu("Terminal compatibility (next launch)")
+        deep_engine_action = QAction("Standard terminal (recommended)", self)
         deep_engine_action.setCheckable(True)
-        deep_engine_action.setChecked(self._terminal_engine == ENGINE_DEEP)
+        deep_engine_action.setChecked(self.context.config.terminal.engine == ENGINE_DEEP)
         deep_engine_action.setEnabled(deep_terminal_available())
         deep_engine_action.setToolTip(
             "Fast xterm.js terminal: live search, clickable links, font zoom, "
@@ -1001,9 +969,9 @@ class MainWindow(QMainWindow):
             lambda _checked=False: self._set_terminal_engine(ENGINE_DEEP)
         )
         engine_menu.addAction(deep_engine_action)
-        classic_engine_action = QAction("Classic Terminal", self)
+        classic_engine_action = QAction("Classic controls", self)
         classic_engine_action.setCheckable(True)
-        classic_engine_action.setChecked(self._terminal_engine == ENGINE_CLASSIC)
+        classic_engine_action.setChecked(self.context.config.terminal.engine == ENGINE_CLASSIC)
         classic_engine_action.triggered.connect(
             lambda _checked=False: self._set_terminal_engine(ENGINE_CLASSIC)
         )

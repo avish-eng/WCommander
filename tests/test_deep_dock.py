@@ -5,11 +5,12 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QListWidget, QPushButton, QWidget
 
 from multipane_commander.ui.deep_terminal.dock import DeepTerminalDock
+from deep_terminal_helpers import FakeDeepSession
 from multipane_commander.ui.deep_terminal.surface import DeepTerminalSurface
 
 
@@ -28,67 +29,10 @@ def _qapp() -> QApplication:
     return _APP
 
 
-class FakeSession(QObject):
-    output_received = Signal(bytes)
-    started = Signal()
-    exited = Signal(int)
-    failed = Signal(str)
-    cwd_changed = Signal(object)
-    title_changed = Signal(str)
-    prompt_changed = Signal(bool)
-    command_finished = Signal(int)
-    command_detected = Signal(str)
-
+class FakeSession(FakeDeepSession):
     def __init__(self, initial_directory: Path, prefer_pty: bool) -> None:
-        super().__init__()
-        self.initial_directory = initial_directory
-        self.prefer_pty = prefer_pty
-        self.backend_name = "conpty"
+        super().__init__(initial_directory, prefer_pty)
         self.shell_kind = _SHELL_KIND
-        self.is_pty = True
-        self.at_prompt = True
-        self.known_directory = initial_directory
-        self._running = False
-        self.starts = 0
-        self.stops = 0
-        self.restarts = 0
-        self.resizes: list[tuple[int, int]] = []
-        self.directories: list[Path] = []
-        self.interrupts = 0
-        self.force_kills = 0
-
-    def start(self) -> None:
-        self.starts += 1
-        self._running = True
-        self.started.emit()
-
-    def stop(self) -> None:
-        self.stops += 1
-        self._running = False
-
-    def is_running(self) -> bool:
-        return self._running
-
-    def restart(self) -> None:
-        self.restarts += 1
-
-    def write_bytes(self, _data: bytes) -> None:
-        return
-
-    def submit_bytes(self) -> bytes:
-        return b"\r"
-
-    def resize(self, cols: int, rows: int) -> None:
-        self.resizes.append((cols, rows))
-
-    def change_directory(self, path: Path) -> None:
-        self.directories.append(path)
-
-    def interrupt_current_program(self) -> None:
-        self.interrupts += 1
-
-    def force_kill_current_program(self) -> None:
-        self.force_kills += 1
 
 
 def _dock(tmp_path: Path, *, visible: bool = False, auto_restart: bool = True):
@@ -117,7 +61,7 @@ def test_deep_dock_does_not_start_shell_when_hidden(tmp_path: Path) -> None:
     dock, sessions = _dock(tmp_path, visible=False)
 
     assert sessions[0].starts == 0
-    assert dock.title_label.text() == "Deep Terminal"
+    assert dock.title_label.text() == "Shell"
 
 
 def test_deep_dock_starts_shell_when_visible(tmp_path: Path) -> None:
@@ -239,15 +183,31 @@ def test_deep_dock_sync_to_path_forwards_when_enabled(tmp_path: Path) -> None:
     assert sessions[0].directories == [target]
 
 
-def test_deep_dock_inject_command_navigates_and_runs(tmp_path: Path) -> None:
+def test_deep_dock_inject_command_submits_cwd_and_command_together(tmp_path: Path) -> None:
     dock, sessions = _dock(tmp_path, visible=True)
-    injected: list[tuple[str, bool]] = []
-    dock.output.inject_command = lambda command, run: injected.append((command, run))
+    target = tmp_path / "work"
+    target.mkdir()
+    dock.inject_command(str(target), "make test")
+    assert sessions[0].commands == [("make test", target, True)]
+    assert sessions[0].directories == []
+    assert dock.recent_commands() == ["make test"]
 
-    dock.inject_command(str(tmp_path / "work"), "make test")
 
-    assert sessions[0].directories == [tmp_path / "work"]
-    assert injected == [("make test", True)]
+def test_deep_dock_records_confirmed_commands_not_raw_terminal_input(tmp_path: Path) -> None:
+    dock, sessions = _dock(tmp_path, visible=True)
+    dock.output.command_submitted.emit("password-entered-into-program")
+    assert dock.recent_commands() == []
+    sessions[0].command_detected.emit("git status")
+    assert dock.recent_commands() == ["git status"]
+
+
+def test_deep_dock_rejects_command_dispatch_while_shell_is_busy(tmp_path: Path) -> None:
+    dock, sessions = _dock(tmp_path, visible=True)
+    sessions[0].at_prompt = False
+    dock.inject_command(str(tmp_path), "make test")
+    assert sessions[0].commands == []
+    assert dock.recent_commands() == []
+
 
 
 def test_deep_dock_history_moves_repeated_command_to_top(tmp_path: Path) -> None:
@@ -331,7 +291,7 @@ def test_deep_dock_more_menu_exposes_modern_actions(tmp_path: Path) -> None:
         "Increase font size",
         "Decrease font size",
         "Reset font size",
-        "Use PTY backend",
+        "Use PTY on next launch",
         "Restart shell",
     ]
     assert dock.pty_action.isChecked()
@@ -408,38 +368,33 @@ def test_deep_dock_disables_auto_restart_after_repeated_exits(tmp_path: Path, mo
     assert "auto-restart disabled" in dock.output.toPlainText()
 
 
-def test_deep_dock_toggle_pty_rebuilds_session(tmp_path: Path) -> None:
+def test_deep_dock_toggle_pty_preserves_running_session(tmp_path: Path) -> None:
     dock, sessions = _dock(tmp_path, visible=True)
-    emitted: list[bool] = []
+    emitted = []
     dock.experimental_pty_toggled.connect(emitted.append)
-
+    sessions[0].output_received.emit(b"existing output")
     dock._toggle_experimental_pty(False)
-
-    assert len(sessions) == 2
-    assert sessions[0].stops == 1
-    assert sessions[1].prefer_pty is False
-    assert sessions[1].starts == 1
+    assert len(sessions) == 1
+    assert dock.session is sessions[0]
+    assert sessions[0].stops == 0
+    assert sessions[0].starts == 1
+    assert sessions[0].prefer_pty is True
+    assert not dock.pty_action.isChecked()
+    assert "existing output" in dock.output.toPlainText()
     assert emitted == [False]
 
 
-def test_deep_dock_ignores_signals_from_replaced_session(tmp_path: Path, monkeypatch) -> None:
+def test_deep_dock_pending_pty_preference_keeps_current_output_and_signals(tmp_path: Path) -> None:
     dock, sessions = _dock(tmp_path, visible=True)
-    old = sessions[0]
-    monkeypatch.setattr(
-        "multipane_commander.ui.deep_terminal.dock.QTimer.singleShot",
-        lambda _ms, callback: callback(),
-    )
-
+    current = sessions[0]
     dock._toggle_experimental_pty(False)
-    new = sessions[1]
-    assert new.starts == 1
+    current.output_received.emit(b"still-running-output")
+    current.prompt_changed.emit(True)
+    assert dock.session is current
+    assert len(sessions) == 1
+    assert "still-running-output" in dock.output.toPlainText()
+    assert "ready" in dock.runtime_label.text()
 
-    old.exited.emit(0)
-    old.output_received.emit(b"stale-output")
-    old.prompt_changed.emit(True)
-
-    assert new.starts == 1
-    assert "stale-output" not in dock.output.toPlainText()
 
 
 def test_deep_dock_search_toggle_and_run(tmp_path: Path) -> None:

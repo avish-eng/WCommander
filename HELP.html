@@ -189,26 +189,26 @@
 
     <section>
       <h2>Embedded terminal</h2>
-      <p class="note">Two engines are available from <strong>Layout (F11) &rarr; Terminal Engine</strong>: <strong>Deep Terminal</strong> (default, xterm.js over a real PTY) and <strong>Classic Terminal</strong> (Qt fallback).</p>
+      <p class="note"><strong>Standard terminal</strong> and <strong>Classic controls</strong> share a terminal core and bundled renderer. Choose a preference under <strong>Layout (F11) &rarr; Terminal compatibility (next launch)</strong>. Mode and backend preferences apply on the next launch, preserving the current session.</p>
       <table>
         <tr><td><kbd>F9</kbd></td><td>Show or hide the terminal</td></tr>
         <tr class="wide"><td><kbd>Ctrl+`</kbd></td><td>Show or hide the terminal</td></tr>
         <tr class="wide"><td><kbd>Ctrl+Shift+`</kbd></td><td>Enter or exit terminal full screen</td></tr>
         <tr class="wide"><td><kbd>Ctrl+Enter</kbd></td><td>Paste the current file name into the terminal</td></tr>
         <tr class="wide"><td><kbd>Alt+Enter</kbd></td><td>Paste the current item's full path into the terminal</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+Shift+K</kbd></td><td>Force-stop the current terminal program and restart the shell</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+F</kbd></td><td>Search terminal output (Deep Terminal)</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> / <kbd>Ctrl+0</kbd></td><td>Font zoom (Deep Terminal)</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+Insert</kbd> / <kbd>Shift+Insert</kbd></td><td>Copy / paste (Deep Terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Shift+K</kbd></td><td>Interrupt the current terminal program, escalating to stop if needed</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+F</kbd></td><td>Search terminal output (standard terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> / <kbd>Ctrl+0</kbd></td><td>Font zoom (standard terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+Insert</kbd> / <kbd>Shift+Insert</kbd></td><td>Copy / paste (standard terminal)</td></tr>
         <tr class="wide"><td><kbd>Ctrl+C</kbd></td><td>Copy when text is selected, otherwise send interrupt</td></tr>
         <tr class="wide"><td><kbd>Ctrl+V</kbd></td><td>Paste into the terminal</td></tr>
         <tr class="wide"><td><kbd>Ctrl+G</kbd></td><td>Focus the command bar</td></tr>
       </table>
       <ul class="muted">
-        <li>The terminal follows the active pane's directory by default. Directory changes are only sent while the shell is idle, so running programs are never interrupted.</li>
-        <li>The Deep Terminal also understands OSC 7 / OSC 9;9 / OSC 133 shell integration when your shell emits it, and skips redundant directory changes.</li>
+        <li>The terminal follows the active pane's directory by default. Directory changes wait for a detected prompt with no unfinished input. Switching to Independent cancels a pending directory change.</li>
+        <li>The standard terminal also understands OSC 7 / OSC 9;9 / OSC 133 shell integration when your shell emits it, and skips redundant directory changes.</li>
         <li>Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart.</li>
-        <li>Pinned commands appear at the top of the history list with a warmer color.</li>
+        <li>Pinned commands appear at the top of the history list. Only commands launched through the app or reported by shell integration are saved; ordinary terminal input is not recorded. Running or loading a saved command requires an idle shell with an empty prompt.</li>
         <li>The terminal backend name, such as ConPTY, appears at the end of the status line.</li>
       </ul>
     </section>

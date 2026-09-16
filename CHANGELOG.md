@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+- Isolate the Windows build's DLL search path to prevent unrelated tool runtimes from supplying incompatible Qt dependencies.
+
+- Consolidate shell controls and Claude Code onto shared terminal rendering and process handling, with offline assets for Claude. Guard command dispatch and directory following, preserve rejected command-bar input, stop recording raw terminal input in command history, and apply terminal preferences on the next launch without replacing active sessions.
+
+- Improve popup reliability: validate transfer destinations and rename previews, reset cancelled AI requests, make theme editing scrollable with changes applied only on Save, default destructive confirmations to Cancel, and keep successful background transfers out of the way.
+
 - Fix slow Back navigation by batching row-style layout notifications, avoiding unchanged style writes, caching recent directory listings with background revalidation, and using cached directory-entry metadata for local listings.
 
 - Preserve both originals when a move/overwrite fails; stage copies and archive extraction before replacement.

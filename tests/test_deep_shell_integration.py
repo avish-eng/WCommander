@@ -62,10 +62,12 @@ def test_parser_tracks_prompt_marks_and_exit_status() -> None:
     assert parser.command_running is False
 
     parser.feed("\x1b]133;B\x07")
-    assert parser.at_prompt is False
-    assert parser.command_running is True
+    assert parser.at_prompt is True
+    assert parser.command_running is False
 
     parser.feed("\x1b]133;C\x07")
+    assert parser.at_prompt is False
+    assert parser.command_running is True
     parser.feed("\x1b]133;D;2\x07")
     assert parser.command_running is False
     assert parser.state.exit_code == 2

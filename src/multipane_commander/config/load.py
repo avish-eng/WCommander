@@ -111,6 +111,7 @@ def load_config() -> AppConfig:
             bookmarked_commands=_string_list(terminal_payload.get("bookmarked_commands", [])),
             history_panel_visible=_safe_bool(terminal_payload.get("history_panel_visible"), False),
             experimental_pty=_safe_bool(terminal_payload.get("experimental_pty"), False),
+            prefer_pty=_safe_bool(terminal_payload.get("prefer_pty"), True),
             engine=_terminal_engine(terminal_payload.get("engine")),
         ),
         ai=AiConfig(
@@ -195,6 +196,7 @@ def save_config(config: AppConfig) -> None:
             "bookmarked_commands": config.terminal.bookmarked_commands,
             "history_panel_visible": config.terminal.history_panel_visible,
             "experimental_pty": config.terminal.experimental_pty,
+            "prefer_pty": config.terminal.prefer_pty,
             "engine": config.terminal.engine,
         },
         "ai": {

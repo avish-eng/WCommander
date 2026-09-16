@@ -120,13 +120,15 @@ def ask_confirmation(
 
     accept_button = dialog.addButton(accept_label, QMessageBox.ButtonRole.AcceptRole)
     cancel_button = dialog.addButton(cancel_label, QMessageBox.ButtonRole.RejectRole)
-    accept_button.setProperty("dialogRole", "primary")
-    cancel_button.setProperty("dialogRole", "secondary")
-    accept_button.setDefault(True)
-    accept_button.setAutoDefault(True)
-    cancel_button.setAutoDefault(False)
+    accept_button.setProperty("dialogRole", "secondary" if is_destructive else "primary")
+    cancel_button.setProperty("dialogRole", "primary" if is_destructive else "secondary")
+    accept_button.setProperty("destructive", is_destructive)
+    default_button = cancel_button if is_destructive else accept_button
+    accept_button.setAutoDefault(not is_destructive)
+    cancel_button.setAutoDefault(is_destructive)
     dialog.setEscapeButton(cancel_button)
-    dialog.setDefaultButton(accept_button)
+    dialog.setDefaultButton(default_button)
+    default_button.setFocus()
     dialog.exec()
     return dialog.clickedButton() is accept_button
 

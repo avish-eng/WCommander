@@ -44,7 +44,7 @@ def _patch_terminals(monkeypatch) -> list[FakeDeepSession]:
         return session
 
     def classic_session(self, path: Path) -> FakeDeepSession:
-        session = FakeDeepSession(path, False)
+        session = FakeDeepSession(path, getattr(self, "_experimental_pty", False))
         sessions.append(session)
         return session
 
@@ -62,7 +62,7 @@ def _patch_terminals(monkeypatch) -> list[FakeDeepSession]:
     return sessions
 
 
-def _make_window(tmp_path: Path) -> MainWindow:
+def _make_window(tmp_path: Path, *, config: AppConfig | None = None) -> MainWindow:
     _qapp()
     left = tmp_path / "left"
     right = tmp_path / "right"
@@ -77,9 +77,10 @@ def _make_window(tmp_path: Path) -> MainWindow:
         layout=LayoutState(active_pane_index=0, layout_mode="stacked"),
         window=WindowState(width=1280, height=860, is_maximized=False),
     )
-    config = AppConfig()
-    config.show_terminal = False
-    config.terminal.engine = "deep"
+    if config is None:
+        config = AppConfig()
+        config.show_terminal = False
+        config.terminal.engine = "deep"
     window = MainWindow(context=AppContext(config=config, state=state))
     window.show()
     QApplication.processEvents()
@@ -167,28 +168,72 @@ def test_main_window_injects_text_into_deep_terminal(tmp_path: Path, monkeypatch
         window.close()
 
 
-def test_main_window_switches_between_deep_and_classic_engines(tmp_path: Path, monkeypatch) -> None:
-    _patch_terminals(monkeypatch)
+def test_main_window_stages_engine_choice_without_replacing_or_hiding_session(tmp_path: Path, monkeypatch) -> None:
+    sessions = _patch_terminals(monkeypatch)
     window = _make_window(tmp_path)
     try:
-        window._set_terminal_engine("classic")
-        QApplication.processEvents()
-
-        assert isinstance(window.terminal_dock, TerminalDock)
-        assert not isinstance(window.terminal_dock, DeepTerminalDock)
-        assert window.context.config.terminal.engine == "classic"
-        assert load_config().terminal.engine == "classic"
-        assert window.content_splitter.widget(1) is window.terminal_dock
-
-        window._set_terminal_engine("deep")
-        QApplication.processEvents()
-
-        assert isinstance(window.terminal_dock, DeepTerminalDock)
-        assert window.context.config.terminal.engine == "deep"
-        assert load_config().terminal.engine == "deep"
-        assert window.content_splitter.widget(1) is window.terminal_dock
+        window._toggle_terminal()
+        dock = window.terminal_dock
+        current = sessions[0]
+        current.output_received.emit(b"ongoing output")
+        current.at_prompt = False
+        for requested in ("classic", "deep"):
+            window._set_terminal_engine(requested)
+            QApplication.processEvents()
+            assert window.terminal_dock is dock
+            assert dock.session is current
+            assert dock.isVisible()
+            assert current.stops == 0
+            assert len(sessions) == 1
+            assert "ongoing output" in dock.output.toPlainText()
+            assert window.context.config.terminal.engine == requested
+            assert load_config().terminal.engine == requested
+            assert window.content_splitter.widget(1) is dock
     finally:
         window.close()
+
+
+def test_main_window_adopts_saved_engine_on_next_startup(tmp_path: Path, monkeypatch) -> None:
+    _patch_terminals(monkeypatch)
+    window = _make_window(tmp_path)
+    window._set_terminal_engine("classic")
+    window.close()
+    reopened = _make_window(tmp_path, config=load_config())
+    try:
+        assert isinstance(reopened.terminal_dock, TerminalDock)
+        assert reopened._terminal_dock_engine() == "classic"
+        reopened._set_terminal_engine("deep")
+        assert isinstance(reopened.terminal_dock, TerminalDock)
+    finally:
+        reopened.close()
+    deep_again = _make_window(tmp_path, config=load_config())
+    try:
+        assert isinstance(deep_again.terminal_dock, DeepTerminalDock)
+        assert deep_again._terminal_dock_engine() == "deep"
+    finally:
+        deep_again.close()
+
+
+def test_main_window_adopts_saved_pty_preference_on_next_startup(tmp_path: Path, monkeypatch) -> None:
+    sessions = _patch_terminals(monkeypatch)
+    window = _make_window(tmp_path)
+    try:
+        window._toggle_terminal()
+        current = window.terminal_dock.session
+        window.terminal_dock._toggle_experimental_pty(False)
+        assert window.terminal_dock.session is current
+        assert current.stops == 0
+        assert current.prefer_pty is True
+        assert load_config().terminal.prefer_pty is False
+    finally:
+        window.close()
+    reopened = _make_window(tmp_path, config=load_config())
+    try:
+        assert reopened.terminal_dock.session is sessions[-1]
+        assert sessions[-1].prefer_pty is False
+    finally:
+        reopened.close()
+
 
 
 def test_main_window_engine_switch_is_a_noop_for_same_engine(tmp_path: Path, monkeypatch) -> None:

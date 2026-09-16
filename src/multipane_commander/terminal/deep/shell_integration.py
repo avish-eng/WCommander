@@ -102,6 +102,7 @@ class ShellIntegrationParser:
             return
         text = data.decode("utf-8", errors="ignore")
         if "\x03" in text:
+            self.state.at_prompt = False
             self.state.command_running = False
             return
         if "\r" in text or "\n" in text:
@@ -165,6 +166,12 @@ class ShellIntegrationParser:
         if looks_like_prompt(self.last_line()):
             self.state.at_prompt = True
             self.state.command_running = False
+            # Standard Windows prompts report the directory even without OSC.
+            line = self.last_line().strip()
+            if _PS_PROMPT_RE.match(line):
+                self.state.cwd = line[3:-1]
+            elif _CMD_PROMPT_RE.match(line) or _UNC_PROMPT_RE.match(line):
+                self.state.cwd = line[:-1]
 
     def _consume_osc(self, stream: str, start: int) -> int:
         index = start + 2
@@ -271,7 +278,12 @@ class ShellIntegrationParser:
             self.state.at_prompt = True
             self.state.command_running = False
             self.state.integration_seen = True
-        elif kind in {"B", "C"}:
+        elif kind == "B":
+            # OSC 133 B ends the prompt; input follows, not command execution.
+            self.state.at_prompt = True
+            self.state.command_running = False
+            self.state.integration_seen = True
+        elif kind == "C":
             self.state.at_prompt = False
             self.state.command_running = True
             self.state.integration_seen = True

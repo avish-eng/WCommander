@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,11 @@ class TransferDialog(QDialog):
 
         self.operation = operation
         self.destination_edit = QLineEdit(str(default_destination))
+        self._default_destination = default_destination
+        self._validation = QLabel()
+        self._validation.setWordWrap(True)
+        self._validation.setObjectName("dialogValidation")
+        self._validation.hide()
         self.conflict_policy_combo = QComboBox()
         self.conflict_policy_combo.addItem("Ask for each conflict", "ask")
         self.conflict_policy_combo.addItem("Overwrite existing", "overwrite")
@@ -54,18 +60,23 @@ class TransferDialog(QDialog):
         destination_label.setObjectName("dialogSectionLabel")
         conflict_label = QLabel("If a file already exists")
         conflict_label.setObjectName("dialogSectionLabel")
-        browse_hint = QLabel("Paste/edit the destination path directly.")
+        browse_hint = QLabel("Relative paths start in the target pane's folder.")
         browse_hint.setObjectName("dialogHint")
         browse_hint.setWordWrap(True)
 
         destination_row = QHBoxLayout()
         destination_row.addWidget(self.destination_edit, 1)
-        normalize_button = QPushButton("Use current")
+        normalize_button = QPushButton("Use target pane")
+        normalize_button.setToolTip(str(default_destination))
         normalize_button.setProperty("dialogRole", "secondary")
         normalize_button.clicked.connect(
             lambda: self.destination_edit.setText(str(default_destination))
         )
         destination_row.addWidget(normalize_button)
+        browse_button = QPushButton("Browse…")
+        browse_button.setAutoDefault(False)
+        browse_button.clicked.connect(self._browse_destination)
+        destination_row.addWidget(browse_button)
 
         for path in source_paths:
             item = QListWidgetItem(path.name)
@@ -93,6 +104,7 @@ class TransferDialog(QDialog):
         destination_card_layout.addWidget(destination_label)
         destination_card_layout.addLayout(destination_row)
         destination_card_layout.addWidget(browse_hint)
+        destination_card_layout.addWidget(self._validation)
 
         conflict_card = QFrame()
         conflict_card.setObjectName("dialogCard")
@@ -132,7 +144,37 @@ class TransferDialog(QDialog):
         install_dialog_key_bindings(self, accept=accept_button.click)
 
     def destination_directory(self) -> Path:
-        return Path(self.destination_edit.text()).expanduser()
+        value = self.destination_edit.text().strip()
+        if not value:
+            raise ValueError("Choose a destination folder.")
+        destination = Path(value).expanduser()
+        if not destination.is_absolute():
+            destination = self._default_destination / destination
+        return destination.resolve()
+
+    def accept(self) -> None:
+        try:
+            destination = self.destination_directory()
+            if not destination.is_dir():
+                raise ValueError("The destination folder does not exist.")
+        except (ValueError, OSError, RuntimeError) as error:
+            self._validation.setText(str(error))
+            self._validation.show()
+            self.destination_edit.setFocus()
+            return
+        self.destination_edit.setText(str(destination))
+        self._validation.hide()
+        super().accept()
 
     def conflict_policy(self) -> str:
         return str(self.conflict_policy_combo.currentData())
+
+    def _browse_destination(self) -> None:
+        try:
+            initial = str(self.destination_directory())
+        except (ValueError, OSError, RuntimeError):
+            initial = str(self._default_destination)
+        selected = QFileDialog.getExistingDirectory(self, "Destination folder", initial)
+        if selected:
+            self.destination_edit.setText(selected)
+            self._validation.hide()

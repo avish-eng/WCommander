@@ -306,7 +306,7 @@ class _JobProgressDialog(QDialog):
         self.cancel_button.setAutoDefault(True)
         self.cancel_button.clicked.disconnect()
         self.cancel_button.clicked.connect(self._dismiss)
-        if not self.isVisible():
+        if not self.isVisible() and snapshot.status == "completed_with_errors":
             self.show()
 
     def _activate_default_button(self) -> None:

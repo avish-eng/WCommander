@@ -1,29 +1,20 @@
-from multipane_commander.ui.deep_terminal.dock import DeepTerminalDock
-from multipane_commander.ui.deep_terminal.engine import (
-    ENGINE_CLASSIC,
-    ENGINE_DEEP,
-    create_terminal_dock,
-    deep_terminal_available,
-    normalize_engine,
-    resolve_engine,
-)
-from multipane_commander.ui.deep_terminal.surface import (
-    WEB_TERMINAL_AVAILABLE,
-    DeepTerminalSurface,
-    build_deep_terminal_html,
-    create_deep_surface,
-)
+"""Lazy exports allow both terminal modes to share the same renderer."""
+from importlib import import_module
 
-__all__ = [
-    "ENGINE_CLASSIC",
-    "ENGINE_DEEP",
-    "DeepTerminalDock",
-    "DeepTerminalSurface",
-    "WEB_TERMINAL_AVAILABLE",
-    "build_deep_terminal_html",
-    "create_deep_surface",
-    "create_terminal_dock",
-    "deep_terminal_available",
-    "normalize_engine",
-    "resolve_engine",
-]
+_MODULES = {
+    "DeepTerminalDock": "dock", "ENGINE_CLASSIC": "engine", "ENGINE_DEEP": "engine",
+    "create_terminal_dock": "engine", "deep_terminal_available": "engine",
+    "normalize_engine": "engine", "resolve_engine": "engine",
+    "DeepTerminalSurface": "surface", "WEB_TERMINAL_AVAILABLE": "surface",
+    "build_deep_terminal_html": "surface", "create_deep_surface": "surface",
+}
+__all__ = list(_MODULES)
+
+
+def __getattr__(name):
+    module = _MODULES.get(name)
+    if module is None:
+        raise AttributeError(name)
+    value = getattr(import_module(f"{__name__}.{module}"), name)
+    globals()[name] = value
+    return value

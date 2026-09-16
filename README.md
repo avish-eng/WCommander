@@ -56,7 +56,7 @@ The full keymap and design rationale live in [SPEC.md §14](SPEC.md).
 
 - **Quick View (F3)** with first-class renderers for Markdown, HTML (with optional `QWebEngineView` "Web" mode), PDF, SVG, image (incl. `.tiff`/`.ico`/`.heic`), CSV/TSV (sortable table), audio/video (`QMediaPlayer`, no autoplay), archives (`.zip` / `.tar.*` / `.7z` / `.rar` / `.jar`), syntax-highlighted source via Pygments, and a hex dump fallback for binaries. A "Raw" toggle (`Ctrl+Shift+R` or the header button) flips any rich renderer back to the underlying source.
 - **Read-only archive browsing** — `Enter` on a `.zip` / `.tar.*` / `.7z` / `.rar` / `.jar` enters the archive as if it were a directory. F5 from inside an archive extracts files or complete folder trees to the local filesystem. Copying or moving the archive itself transfers the original archive file.
-- **Deep Terminal** (default) — an xterm.js terminal over a real PTY (ConPTY/WinPTY on Windows, POSIX PTY on macOS/Linux) with coalesced output for low CPU under heavy logs, prompt-aware directory following, live search (`Ctrl+F`), clickable links, font zoom (`Ctrl+=`/`Ctrl+-`), proper copy/paste, a pinnable command history panel, and crash-safe auto-restart. The original Qt **Classic Terminal** remains available from **Layout (F11) → Terminal Engine**.
+- **Embedded shell** — a shared terminal core and bundled xterm.js renderer, with PTY support, prompt-aware directory following, search, zoom, copy/paste, and pinned commands. **Layout (F11) → Terminal compatibility (next launch)** selects standard or classic controls without replacing the current session. Claude Code uses the same renderer and process backend while keeping its separate per-folder sessions.
 - **Embedded terminal** that follows the active pane's directory by default.
 - **Custom marking model** — `Insert`/`Space` toggle marks (separate from cursor selection) so multi-file ops compose naturally with cursor movement.
 - **Find Files** with glob name patterns + optional case-insensitive content search; binary files skipped via NUL-byte sniff; results capped at 5 000.
@@ -80,8 +80,9 @@ src/multipane_commander/
 │   ├── multi_rename_dialog.py  Ctrl+M
 │   ├── find_files_dialog.py    Alt+F7
 │   ├── folder_browser.py     Tree sidebar
-│   ├── terminal_dock.py      Classic embedded terminal
-│   ├── deep_terminal/        Deep Terminal — dock, xterm.js surface, engine picker
+│   ├── terminal_dock.py      Classic controls over the shared terminal core
+│   ├── terminal_commands.py  Shared command dispatch and history
+│   ├── deep_terminal/        Standard dock, shared xterm.js surface, compatibility picker
 │   └── themes.py             Palette, QSS
 ├── services/
 │   ├── fs/local_fs.py        LocalFileSystem
@@ -90,8 +91,8 @@ src/multipane_commander/
 │   ├── bookmarks.py
 │   └── undo.py               UndoStack (LIFO, capacity 50)
 ├── terminal/
-│   ├── deep/                 Deep Terminal — PTY backends, shell-integration parser, session
-│   └── …                     Classic backend/session/ANSI buffer
+│   ├── deep/                 Shared PTY backends, shell-integration parser, session
+│   └── session.py            Classic session compatibility adapter
 ├── state/                    Per-tab state, persistence
 └── platform/                 Platform-specific helpers (root paths, etc.)
 ```

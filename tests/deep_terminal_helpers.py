@@ -34,6 +34,24 @@ class FakeDeepSession(QObject):
         self.directories: list[Path] = []
         self.interrupts = 0
         self.force_kills = 0
+        self.cancelled_directory_changes = 0
+        self.commands: list[tuple[str, Path | None, bool]] = []
+        self.writes: list[bytes] = []
+
+    @property
+    def can_inject(self) -> bool:
+        return self._running and self.at_prompt
+
+    def submit_command(self, command: str, *, cwd: Path | None = None, run: bool = True) -> bool:
+        if not self.can_inject:
+            return False
+        self.commands.append((command, cwd, run))
+        if run:
+            self.command_detected.emit(command)
+        return True
+
+    def cancel_directory_change(self) -> None:
+        self.cancelled_directory_changes += 1
 
     def start(self) -> None:
         self.starts += 1
@@ -50,8 +68,8 @@ class FakeDeepSession(QObject):
     def restart(self) -> None:
         self.restarts += 1
 
-    def write_bytes(self, _data: bytes) -> None:
-        return
+    def write_bytes(self, data: bytes) -> None:
+        self.writes.append(data)
 
     def submit_bytes(self) -> bytes:
         return b"\r"

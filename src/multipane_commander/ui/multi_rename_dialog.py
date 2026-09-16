@@ -16,13 +16,15 @@ order and pushes a record onto the supplied UndoStack.
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -61,6 +63,7 @@ class RenamePreview:
     source: Path
     target: Path
     collision: bool
+    error: str = ""
 
 
 def build_preview(
@@ -69,25 +72,35 @@ def build_preview(
     name_template: str,
     ext_template: str,
 ) -> list[RenamePreview]:
-    new_paths: list[Path] = []
-    used: set[Path] = set()
+    previews: list[RenamePreview] = []
+    targets: dict[Path, list[RenamePreview]] = {}
     for index, source in enumerate(sources, start=1):
         stem = source.stem
         ext = source.suffix.lstrip(".")
         new_stem = render_template(name_template, name_no_ext=stem, extension=ext, counter=index)
         new_ext = render_template(ext_template, name_no_ext=stem, extension=ext, counter=index)
         new_name = new_stem + (("." + new_ext) if new_ext else "")
-        target = source.with_name(new_name)
-        new_paths.append(target)
-        used.add(target)
-    previews: list[RenamePreview] = []
-    seen: set[Path] = set()
-    for source, target in zip(sources, new_paths):
-        collision = target.exists() and target != source
-        if target in seen:
-            collision = True
-        seen.add(target)
-        previews.append(RenamePreview(source=source, target=target, collision=collision))
+        try:
+            if not new_stem or new_name in {".", ".."}:
+                raise ValueError("Enter a nonempty file name.")
+            reserved = getattr(os.path, "isreserved", lambda name: (
+                PureWindowsPath(name).is_reserved()
+                or bool(re.search(r'[<>:"/\\|?*\x00-\x1f]', name))
+                or name.endswith((".", " "))
+            ))
+            if "\x00" in new_name or (os.name == "nt" and reserved(new_name)):
+                raise ValueError("The name contains characters or a name reserved by Windows.")
+            target = source.with_name(new_name)
+            preview = RenamePreview(source, target, target.exists() and target != source)
+        except (ValueError, OSError) as error:
+            preview = RenamePreview(source, source, False, str(error))
+        previews.append(preview)
+        if not preview.error:
+            targets.setdefault(preview.target, []).append(preview)
+    for duplicates in targets.values():
+        if len(duplicates) > 1:
+            for preview in duplicates:
+                preview.collision = True
     return previews
 
 
@@ -122,6 +135,7 @@ class MultiRenameDialog(QDialog):
         layout.addWidget(hint)
 
         self._preview_table = QTableWidget(0, 3)
+        self._preview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._preview_table.setHorizontalHeaderLabels(["Original", "New", "Status"])
         header = self._preview_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -129,11 +143,15 @@ class MultiRenameDialog(QDialog):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._preview_table.verticalHeader().setVisible(False)
         layout.addWidget(self._preview_table, 1)
+        self._validation = QLabel()
+        self._validation.setWordWrap(True)
+        layout.addWidget(self._validation)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         rename_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self._rename_button = rename_button
         rename_button.setText("Rename")
         rename_button.setDefault(True)
         rename_button.setAutoDefault(True)
@@ -158,17 +176,26 @@ class MultiRenameDialog(QDialog):
 
     def _refresh_preview(self) -> None:
         previews = self.previews()
+        invalid = any(preview.error or preview.collision for preview in previews)
+        self._rename_button.setEnabled(bool(previews) and not invalid)
+        self._validation.setText("Resolve invalid names and collisions before renaming." if invalid else "")
         self._preview_table.setRowCount(len(previews))
         for row, preview in enumerate(previews):
             original = QTableWidgetItem(preview.source.name)
-            target = QTableWidgetItem(preview.target.name)
-            status = QTableWidgetItem("collision" if preview.collision else "ok")
-            if preview.collision:
+            target = QTableWidgetItem("Invalid name" if preview.error else preview.target.name)
+            status = QTableWidgetItem("invalid name" if preview.error else ("collision" if preview.collision else "ok"))
+            status.setToolTip(preview.error)
+            if preview.collision or preview.error:
                 for cell in (original, target, status):
                     cell.setForeground(Qt.GlobalColor.red)
             self._preview_table.setItem(row, 0, original)
             self._preview_table.setItem(row, 1, target)
             self._preview_table.setItem(row, 2, status)
+
+    def accept(self) -> None:
+        self._refresh_preview()
+        if self._rename_button.isEnabled():
+            super().accept()
 
 
 def apply_renames(
@@ -181,6 +208,9 @@ def apply_renames(
     succeeded = 0
     errors: list[str] = []
     for preview in previews:
+        if preview.error:
+            errors.append(f"Skipped {preview.source.name}: {preview.error}")
+            continue
         if preview.source == preview.target:
             continue
         if preview.collision:

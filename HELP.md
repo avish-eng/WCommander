@@ -199,12 +199,11 @@ Computes recursive size and updates the Size column. Synchronous, capped at 50 0
 
 ### Embedded terminal — `F9` (alias `Ctrl+\``)
 
-A real PTY-backed shell, docked at the bottom of the window. Two engines ship with the app and can be swapped from **Layout (F11) → Terminal Engine**:
+A shell docked at the bottom of the window. **Standard terminal** and **Classic controls** share the terminal backend, command dispatch, history, and bundled xterm.js renderer. Classic controls also support a Qt text fallback when WebEngine is unavailable.
 
-- **Deep Terminal** (default) — xterm.js rendering over ConPTY / WinPTY (Windows) or a POSIX PTY (macOS/Linux). Coalesced output, live search, clickable links, font zoom, mouse-friendly copy/paste, command history panel, and crash-safe auto-restart.
-- **Classic Terminal** — the original Qt widget surface, kept as a fallback for machines without Qt WebEngine.
+Choose a preference from **Layout (F11) → Terminal compatibility (next launch)**. Mode and PTY preference changes take effect on the next launch, preserving the current session and output.
 
-- **Follow active pane** is on by default — pane navigation issues a `cd` so the terminal tracks the active pane's directory. Directory changes are only injected when the shell is idle, so a running program is never interrupted. The terminal also listens to shell-integration sequences (OSC 7/9;9/133) when your shell emits them and skips redundant `cd`s.
+- **Follow active pane** is on by default. Directory changes wait until the shell is at a detected prompt with no unfinished input. Switching to **Independent** cancels a pending directory change. Shell-integration sequences (OSC 7/9;9/133) improve prompt and directory detection when your shell emits them.
 - Showing the terminal moves focus to it, so `F9` doubles as "focus terminal" once it's open.
 
 | Key | Action |
@@ -214,13 +213,13 @@ A real PTY-backed shell, docked at the bottom of the window. Two engines ship wi
 | `Ctrl+Enter` | Paste the cursor item's **name** into the terminal (quoted if needed) |
 | `Alt+Enter` | Paste the cursor item's **full path** into the terminal |
 | `Ctrl+Shift+K` | Force-kill the program currently running in the terminal |
-| `Ctrl+F` | Search terminal output (Deep Terminal; `Enter`/`Shift+Enter` cycle matches) |
-| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Font zoom (Deep Terminal) |
-| `Ctrl+Insert` / `Shift+Insert` | Copy / paste (Deep Terminal) |
+| `Ctrl+F` | Search terminal output (standard terminal; `Enter`/`Shift+Enter` cycle matches) |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Font zoom (standard terminal) |
+| `Ctrl+Insert` / `Shift+Insert` | Copy / paste (standard terminal) |
 | `Ctrl+C` | Copy when text is selected, otherwise send interrupt |
 | `Ctrl+V` | Paste into the terminal |
 
-Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart. The **History** button opens the commands panel: double-click to run, `Enter` to load, and the context menu pins, unpins or clears entries.
+Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart. The **History** button opens the commands panel: double-click to run, `Enter` to load, and the context menu pins, unpins or clears entries. Commands launched through the app or explicitly reported by shell integration are saved. Ordinary terminal keystrokes, including input to child programs, are not recorded as command history. Running or loading a saved command requires an idle shell with an empty prompt.
 
 ### Command bar — `Ctrl+G`
 
@@ -229,7 +228,7 @@ A persistent one-liner above the F-key bar that always shows the active pane's d
 - **Activate**: click it, press `Ctrl+G`, or just start typing while a pane has focus
 - **Enter** — runs the command inline; output streams into a collapsible panel above the input. The active pane refreshes on process exit
 - `cd <dir>` is intercepted and navigates the **active pane** instead of spawning a subprocess; bare `cd` goes to home
-- **Shift+Enter** — escalates to the full terminal: opens it, navigates the PTY to the active pane's directory, and injects the command
+- **Shift+Enter** — requests execution in the full terminal using the active pane's directory. A busy shell, unfinished input, or invalid directory prevents dispatch and leaves the command text available for retry
 - `↑` / `↓` cycle session command history (no persistence)
 - `Esc` dismisses the output panel; pressing it again clears the input; again returns focus to the pane
 

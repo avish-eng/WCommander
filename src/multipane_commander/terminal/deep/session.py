@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import os
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -12,6 +13,7 @@ from multipane_commander.terminal.deep.shell_integration import ShellIntegration
 
 _FORCE_KILL_GRACE_MS = 1_200
 _MAX_SYNC_ATTEMPTS = 3
+_TERMINAL_REPLY = re.compile(rb"(?:\x1b\[(?:\??[0-9;]*[cR]|[IO]))+")
 
 
 class DeepTerminalSession(QObject):
@@ -61,6 +63,8 @@ class DeepTerminalSession(QObject):
         self._last_exit_code: int | None = None
         self._last_command: str | None = None
         self._last_title: str | None = None
+        self._input_dirty = False
+        self._follow_pending = False
         self.backend.output_received.connect(self._read_output)
         self.backend.started.connect(self._handle_started)
         self.backend.exited.connect(self._handle_exited)
@@ -90,6 +94,10 @@ class DeepTerminalSession(QObject):
     def at_prompt(self) -> bool:
         return self.parser.at_prompt
 
+    @property
+    def can_inject(self) -> bool:
+        return self.is_running() and self.at_prompt and not self._input_dirty
+
     def start(self) -> None:
         self._restart_pending = False
         self.parser.reset()
@@ -98,6 +106,7 @@ class DeepTerminalSession(QObject):
         self._last_exit_code = None
         self._last_command = None
         self._last_title = None
+        self._input_dirty = False
         self.backend.initial_directory = self._desired_directory
         self.backend.start()
 
@@ -117,7 +126,21 @@ class DeepTerminalSession(QObject):
         return self.backend.is_running()
 
     def write_bytes(self, data: bytes) -> None:
+        if not data:
+            return
+        if _TERMINAL_REPLY.fullmatch(data):
+            self.backend.write_bytes(data)
+            return
+        # Cursor/history navigation can introduce text we cannot reconstruct.
+        # Treat any input as a draft until the user submits/cancels it.
+        self._input_dirty = True
         self.parser.note_input(data)
+        if b"\r" in data or b"\n" in data or b"\x03" in data:
+            self._input_dirty = False
+        # Publish the busy transition immediately, including silent commands.
+        if self._last_prompt != self.parser.at_prompt:
+            self._last_prompt = self.parser.at_prompt
+            self.prompt_changed.emit(self._last_prompt)
         self.backend.write_bytes(data)
 
     def write_text(self, text: str) -> None:
@@ -127,6 +150,30 @@ class DeepTerminalSession(QObject):
         cleaned = command.rstrip()
         self.write_bytes(cleaned.encode("utf-8", errors="replace"))
         self.write_bytes(self.submit_bytes())
+
+    def submit_command(self, command: str, *, cwd: Path | None = None, run: bool = True) -> bool:
+        """Accept explicit UI commands only at an empty shell prompt."""
+        if not command.strip() or not self.can_inject:
+            return False
+        if cwd is not None and not cwd.is_dir():
+            return False
+        payload = command
+        if run and cwd is not None:
+            change = build_cd_command(cwd, self.shell_kind)
+            if self.shell_kind == "pwsh":
+                quoted_command = command.replace("'", "''")
+                payload = f"{change}; if ($?) {{ . ([scriptblock]::Create('{quoted_command}')) }}"
+            elif self.shell_kind == "cmd":
+                payload = f"{change} && ({command})"
+            else:
+                payload = f"{change} && {{ {command}\n}}"
+        if run:
+            self._follow_pending = False
+            self.send_command(payload)
+            self.command_detected.emit(command.strip())
+        else:
+            self.write_text(payload)
+        return True
 
     def submit_bytes(self) -> bytes:
         if self.backend.is_pty:
@@ -147,8 +194,14 @@ class DeepTerminalSession(QObject):
         if path != self._desired_directory:
             self._sync_attempts = 0
         self._desired_directory = path
+        self._follow_pending = True
         self.backend.initial_directory = path
         self._maybe_sync_directory()
+
+    def cancel_directory_change(self) -> None:
+        self._follow_pending = False
+        self._desired_directory = self._known_directory
+        self.backend.initial_directory = self._known_directory
 
     def _escalate_kill(self) -> None:
         if not self.backend.is_running():
@@ -158,12 +211,10 @@ class DeepTerminalSession(QObject):
         self.backend.terminate_process_tree()
 
     def _maybe_sync_directory(self) -> None:
-        if not self.backend.is_running():
-            return
-        if not self.parser.at_prompt:
+        if not self._follow_pending or not self.can_inject:
             return
         desired = self._desired_directory
-        if desired == self._known_directory or desired == self._last_sent_directory:
+        if desired == self._known_directory:
             return
         if self._sync_attempts >= _MAX_SYNC_ATTEMPTS:
             return
@@ -171,6 +222,10 @@ class DeepTerminalSession(QObject):
         self._last_sent_directory = desired
         self._known_directory = desired
         self._sync_attempts += 1
+        self._follow_pending = False
+        self.parser.note_input(b"\r")
+        self._last_prompt = False
+        self.prompt_changed.emit(False)
         self.backend.write_text(command + shell_line_ending(self.shell_kind))
 
     def _read_output(self, data: bytes) -> None:
@@ -196,6 +251,7 @@ class DeepTerminalSession(QObject):
             self._last_prompt = parser.at_prompt
             self.prompt_changed.emit(parser.at_prompt)
             if parser.at_prompt:
+                self._input_dirty = False
                 self._maybe_sync_directory()
         exit_code = parser.state.exit_code
         if exit_code is not None and exit_code != self._last_exit_code:

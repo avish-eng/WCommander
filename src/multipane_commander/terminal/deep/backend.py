@@ -375,11 +375,13 @@ class DeepTerminalBackend(QObject):
         initial_directory: Path,
         shell: ShellSpec | None = None,
         prefer_pty: bool = True,
+        environment_overrides: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.initial_directory = initial_directory
         self.shell = shell or pick_shell()
         self.prefer_pty = prefer_pty
+        self.environment_overrides = dict(environment_overrides or {})
         self._lock = threading.RLock()
         self._strategy: _Strategy | None = None
         self._spawn_thread: threading.Thread | None = None
@@ -610,6 +612,7 @@ class DeepTerminalBackend(QObject):
         if not is_windows():
             env.setdefault("TERM", "xterm-256color")
             env.setdefault("COLORTERM", "truecolor")
+        env.update(self.environment_overrides)
         return env
 
     def _force_terminate_after_grace(self, strategy: _Strategy) -> None:

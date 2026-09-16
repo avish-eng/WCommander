@@ -235,10 +235,14 @@ class CommandBar(QFrame):
         command = self._input.text().strip()
         if not command:
             return
-        self._add_to_history(command)
-        self._input.clear()
         log.debug("command_bar: escalate %r in %s", command, self._cwd)
         self.escalate_requested.emit(str(self._cwd), command)
+
+    def terminal_command_accepted(self, command: str) -> None:
+        """Clear only a command that the terminal has actually accepted."""
+        self._add_to_history(command)
+        if self._input.text().strip() == command:
+            self._input.clear()
 
     # -------------------------------------------------------------------------
     # cd interception

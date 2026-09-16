@@ -10,53 +10,16 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QListWidget, QPushButton
 
 from multipane_commander.ui.terminal_dock import TerminalDock
+from deep_terminal_helpers import FakeDeepSession
 
 
 _APP: QApplication | None = None
 
 
-class FakeSignal:
-    def connect(self, _handler) -> None:
-        return None
-
-
-class FakeSession:
+class FakeSession(FakeDeepSession):
     def __init__(self) -> None:
+        super().__init__(Path.home())
         self.backend_name = "fake"
-        self.shell_kind = "pwsh"
-        self.output_received = FakeSignal()
-        self.started = FakeSignal()
-        self.interrupts = 0
-        self.force_kills = 0
-        self.starts = 0
-        self.backend = self
-
-    def start(self) -> None:
-        self.starts += 1
-
-    def stop(self) -> None:
-        return None
-
-    def write_bytes(self, _data: bytes) -> None:
-        return None
-
-    def submit_bytes(self) -> bytes:
-        return b"\r"
-
-    def resize(self, _cols: int, _rows: int) -> None:
-        return None
-
-    def change_directory(self, _path: Path) -> None:
-        return None
-
-    def interrupt_current_program(self) -> None:
-        self.interrupts += 1
-
-    def force_kill_current_program(self) -> None:
-        self.force_kills += 1
-
-    def is_running(self) -> bool:
-        return self.starts > 0
 
 
 def _qapp() -> QApplication:
@@ -223,7 +186,7 @@ def test_terminal_dock_moves_secondary_actions_into_overflow(
         "Clear terminal",
         "Rerun last command",
         "Kill current process",
-        "Use PTY backend",
+        "Use PTY on next launch",
         "Restart shell",
     ]
     assert dock.rerun_action.isEnabled()
@@ -392,3 +355,44 @@ def test_terminal_history_caps_at_one_hundred_rows_keeping_pinned_and_newest(
     rows = [dock.command_list.item(row).text() for row in range(dock.command_list.count())]
     assert len(rows) == 100
     assert rows[:4] == ["cls", "dir", "cmd 0", "brand new"]
+
+
+def test_terminal_dock_records_confirmed_commands_not_raw_program_input(monkeypatch, tmp_path):
+    _qapp()
+    session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: session)
+    dock = TerminalDock(initial_directory=tmp_path, visible=True, follow_active_pane=True)
+    dock.output.command_submitted.emit("password-entered-into-program")
+    assert dock.recent_commands() == []
+    session.command_detected.emit("git status")
+    assert dock.recent_commands() == ["git status"]
+
+
+def test_terminal_dock_dispatch_uses_session_and_preserves_busy_program(monkeypatch, tmp_path):
+    _qapp()
+    session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: session)
+    dock = TerminalDock(initial_directory=tmp_path, visible=True, follow_active_pane=True)
+    session.at_prompt = False
+    dock.inject_command(str(tmp_path), "git status")
+    assert session.commands == []
+    session.at_prompt = True
+    dock.inject_command(str(tmp_path), "git status")
+    assert session.commands == [("git status", tmp_path, True)]
+    assert dock.recent_commands() == ["git status"]
+
+
+def test_terminal_dock_pty_preference_keeps_running_session(monkeypatch, tmp_path):
+    _qapp()
+    session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: session)
+    dock = TerminalDock(initial_directory=tmp_path, visible=True, follow_active_pane=True)
+    active_runtime = dock.runtime_label.text()
+    preferences = []
+    dock.experimental_pty_toggled.connect(preferences.append)
+    dock._toggle_experimental_pty(False)
+    assert dock.session is session
+    assert session.stops == 0
+    assert session.starts == 1
+    assert preferences == [False]
+    assert dock.runtime_label.text() == active_runtime

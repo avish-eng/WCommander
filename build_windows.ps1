@@ -33,9 +33,22 @@ if ($Clean) {
 }
 $Args += "MultiPaneCommander.spec"
 
-& $Python -m PyInstaller @Args
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+$BuildOriginalPath = $env:PATH
+try {
+    # Third-party tool directories can contain incompatible DLLs (notably ICU).
+    # Let PyInstaller hooks find package DLLs and Windows supply system DLLs.
+    $env:PATH = @(
+        (Split-Path -Parent $Python),
+        (Join-Path $env:SystemRoot "System32"),
+        $env:SystemRoot
+    ) -join [IO.Path]::PathSeparator
+    & $Python -m PyInstaller @Args
+    $BuildExitCode = $LASTEXITCODE
+} finally {
+    $env:PATH = $BuildOriginalPath
+}
+if ($BuildExitCode -ne 0) {
+    exit $BuildExitCode
 }
 
 Write-Host ""

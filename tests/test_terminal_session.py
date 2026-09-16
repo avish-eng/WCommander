@@ -8,67 +8,70 @@ import sys
 from multipane_commander.terminal.backends import QProcessBackend, WinPtyBackend, create_terminal_backend
 from multipane_commander.terminal.backends import _clean_child_path
 from multipane_commander.terminal.session import TerminalSession
+from multipane_commander.terminal.deep.session import DeepTerminalSession
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QApplication
+
+_APP = None
+
+def _qapp():
+    global _APP
+    _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
-class FakeBackend:
+class FakeBackend(QObject):
+    output_received = Signal(bytes)
+    started = Signal()
+    exited = Signal(int)
+    failed = Signal(str)
+
     def __init__(self) -> None:
-        self.shell = type("Shell", (), {"kind": "posix"})()
+        super().__init__()
+        self.shell = SimpleNamespace(kind="posix")
         self.backend_name = "fake"
-        self.writes: list[str] = []
+        self.is_pty = True
+        self.writes = []
         self.running = True
 
-    class _Signal:
-        def connect(self, _handler) -> None:
-            return None
+    def start(self):
+        self.running = True
+        self.started.emit()
 
-    output_received = _Signal()
-    started = _Signal()
+    def stop(self):
+        self.running = False
 
-    def start(self) -> None:
-        return None
-
-    def stop(self) -> None:
-        return None
-
-    def send_command(self, command: str) -> None:
-        self.writes.append(f"command:{command}")
-
-    def write_text(self, text: str) -> None:
+    def write_text(self, text):
         self.writes.append(text)
 
-    def write_bytes(self, data: bytes) -> None:
+    def write_bytes(self, data):
         self.writes.append(data.decode("utf-8", errors="replace"))
 
-    def interrupt_current_program(self) -> None:
+    def interrupt_current_program(self):
         self.writes.append("interrupt")
 
-    def force_kill_current_program(self) -> None:
-        self.writes.append("force-kill")
+    def terminate_process_tree(self):
+        self.writes.append("terminate")
 
-    def is_running(self) -> bool:
+    def is_running(self):
         return self.running
 
 
-def test_terminal_session_uses_selected_backend(monkeypatch) -> None:
+def test_terminal_session_uses_shared_backend_factory(monkeypatch) -> None:
+    _qapp()
     backend = FakeBackend()
-    seen: dict[str, object] = {}
+    seen = {}
     monkeypatch.setattr(
-        "multipane_commander.terminal.session.create_terminal_backend",
-        lambda initial_directory, experimental_pty=False: seen.update(
-            {"initial_directory": initial_directory, "experimental_pty": experimental_pty}
-        )
-        or backend,
+        "multipane_commander.terminal.deep.session.create_deep_backend",
+        lambda **kwargs: seen.update(kwargs) or backend,
     )
-
     session = TerminalSession(initial_directory=Path.home(), experimental_pty=True)
-
+    assert isinstance(session, DeepTerminalSession)
     assert session.backend is backend
     assert session.backend_name == "fake"
     assert session.shell_kind == "posix"
-    assert seen == {
-        "initial_directory": Path.home(),
-        "experimental_pty": True,
-    }
+    assert seen == {"initial_directory": Path.home(), "shell": None, "prefer_pty": True}
+
 
 
 def test_clean_child_path_removes_frozen_bundle_dir(tmp_path: Path) -> None:
@@ -110,60 +113,49 @@ def test_frozen_windows_package_honors_experimental_pty(
     assert backend.initial_directory == tmp_path
 
 
-def test_terminal_session_hides_directory_sync_command(monkeypatch, tmp_path: Path) -> None:
+def test_terminal_session_defers_directory_follow_until_prompt_and_forwards_raw_output(tmp_path) -> None:
+    _qapp()
     backend = FakeBackend()
-    monkeypatch.setattr(
-        "multipane_commander.terminal.session.create_terminal_backend",
-        lambda initial_directory, experimental_pty=False: backend,
-    )
-
-    session = TerminalSession(initial_directory=tmp_path)
+    session = TerminalSession(initial_directory=tmp_path, backend=backend)
+    received = []
+    session.output_received.connect(received.append)
     target = tmp_path / "folder"
-
     session.change_directory(target)
-
+    assert backend.writes == []
+    backend.output_received.emit(b"\x1b]133;B\x07")
     assert backend.writes == ["cd -- '" + str(target) + "'\n"]
-    assert session._strip_hidden_commands("cd -- '" + str(target) + "'\nhello") == "\nhello"
+    raw = b"\x1b[31mraw\xe2\x82"
+    backend.output_received.emit(raw)
+    backend.output_received.emit(b"\xac")
+    assert received == [b"\x1b]133;B\x07", raw, b"\xac"]
 
 
-def test_terminal_session_uses_carriage_return_for_pty_submit(monkeypatch) -> None:
+def test_terminal_session_uses_carriage_return_for_pty_submit() -> None:
     backend = FakeBackend()
-    backend.shell = type("Shell", (), {"kind": "cmd"})()
-    backend.backend_name = "winpty"
-    monkeypatch.setattr(
-        "multipane_commander.terminal.session.create_terminal_backend",
-        lambda initial_directory, experimental_pty=False: backend,
-    )
-
-    session = TerminalSession(initial_directory=Path.home(), experimental_pty=True)
-
+    session = TerminalSession(initial_directory=Path.home(), experimental_pty=True, backend=backend)
     assert session.submit_bytes() == b"\r"
 
 
-def test_terminal_session_interrupts_current_program(monkeypatch) -> None:
+def test_terminal_session_interrupts_current_program() -> None:
     backend = FakeBackend()
-    monkeypatch.setattr(
-        "multipane_commander.terminal.session.create_terminal_backend",
-        lambda initial_directory, experimental_pty=False: backend,
-    )
-
-    session = TerminalSession(initial_directory=Path.home())
+    session = TerminalSession(initial_directory=Path.home(), backend=backend)
     session.interrupt_current_program()
-
     assert backend.writes == ["interrupt"]
 
 
-def test_terminal_session_force_kills_current_program(monkeypatch) -> None:
+def test_terminal_session_force_kill_escalates_after_grace_period(monkeypatch) -> None:
+    _qapp()
     backend = FakeBackend()
-    monkeypatch.setattr(
-        "multipane_commander.terminal.session.create_terminal_backend",
-        lambda initial_directory, experimental_pty=False: backend,
-    )
-
-    session = TerminalSession(initial_directory=Path.home())
+    callbacks = []
+    monkeypatch.setattr("multipane_commander.terminal.deep.session.QTimer.singleShot",
+                        lambda delay, callback: callbacks.append((delay, callback)))
+    session = TerminalSession(initial_directory=Path.home(), backend=backend)
     session.force_kill_current_program()
+    assert backend.writes == ["interrupt"]
+    assert callbacks[0][0] > 0
+    callbacks[0][1]()
+    assert backend.writes == ["interrupt", "terminate"]
 
-    assert backend.writes == ["force-kill"]
 
 
 def test_winpty_backend_prefers_conpty_engine(monkeypatch, tmp_path: Path) -> None:

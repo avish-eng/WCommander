@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -22,8 +23,8 @@ from PySide6.QtWidgets import (
 from multipane_commander.config.model import ThemeDefinition
 from multipane_commander.services.theme_backups import backup_theme_definition, theme_backup_dir
 from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
-from multipane_commander.ui.dialogs import ask_confirmation, show_message
-from multipane_commander.ui.themes import slugify_theme_name
+from multipane_commander.ui.dialogs import ask_confirmation
+from multipane_commander.ui.themes import build_palette, slugify_theme_name
 
 
 class ThemeEditorDialog(QDialog):
@@ -48,6 +49,8 @@ class ThemeEditorDialog(QDialog):
         self._initial_theme_id = selected_theme_id
         self._available_theme_map = {theme.id: theme for theme in available_themes}
         self._default_theme_id = selected_theme_id
+        self._original_default_theme_id = selected_theme_id
+        self._pending_deletions: dict[str, ThemeDefinition] = {}
         self._current_source_theme_id = selected_theme_id
         self._is_loading_theme = False
         self._fields: dict[str, QLineEdit] = {}
@@ -200,6 +203,7 @@ class ThemeEditorDialog(QDialog):
         reset_button.clicked.connect(self._reset_to_original)
         button_box.addButton(reset_button, QDialogButtonBox.ButtonRole.ResetRole)
         save_button = QPushButton("Save Theme")
+        self._save_button = save_button
         save_button.setProperty("dialogRole", "primary")
         save_button.setDefault(True)
         save_button.setAutoDefault(True)
@@ -214,12 +218,26 @@ class ThemeEditorDialog(QDialog):
         hint = QLabel("Press Enter to save the current theme.")
         hint.setObjectName("dialogHint")
 
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addWidget(card, 1)
-        layout.addWidget(preview_card)
-        layout.addWidget(hint)
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.addWidget(title)
+        body_layout.addWidget(subtitle)
+        body_layout.addWidget(card)
+        body_layout.addWidget(preview_card)
+        body_layout.addWidget(hint)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setWidget(body)
+        self._validation = QLabel()
+        self._validation.setWordWrap(True)
+        self._validation.hide()
+        layout.addWidget(self._scroll, 1)
+        layout.addWidget(self._validation)
         layout.addWidget(button_box)
+        screen = self.screen().availableGeometry()
+        self.resize(min(720, screen.width() - 40), min(760, screen.height() - 40))
 
         self.name_input.selectAll()
         self.name_input.setFocus()
@@ -288,7 +306,6 @@ class ThemeEditorDialog(QDialog):
         if not isinstance(theme_id, str) or theme_id not in self._available_theme_map:
             return
         self._default_theme_id = theme_id
-        self.default_theme_requested.emit(theme_id)
         self._update_theme_management_buttons()
 
     def _delete_selected_theme(self) -> None:
@@ -302,26 +319,15 @@ class ThemeEditorDialog(QDialog):
             parent=self,
             title="Delete theme?",
             message=(
-                f'Delete "{theme.display_name}" from the theme list? '
-                f'A backup will be saved in "{theme_backup_dir()}".'
+                f'Remove "{theme.display_name}" when you save? '
+                f'A backup will be saved in "{theme_backup_dir()}". Cancel discards this change.'
             ),
             accept_label="Delete Theme",
             is_destructive=True,
         ):
             return
 
-        try:
-            backup_theme_definition(theme)
-        except OSError as error:
-            show_message(
-                parent=self,
-                title="Theme backup failed",
-                message="The theme was not deleted because its backup could not be saved.",
-                details=str(error),
-                level="error",
-            )
-            return
-
+        self._pending_deletions[theme_id] = theme
         deleted_default = theme_id == self._default_theme_id
         self._available_theme_map.pop(theme_id, None)
         current_index = self.theme_choice.currentIndex()
@@ -336,8 +342,29 @@ class ThemeEditorDialog(QDialog):
         if theme_id == self._initial_theme_id:
             self._initial_theme_id = self._default_theme_id
             self._initial_theme = self._available_theme_map[self._initial_theme_id]
-        self.delete_theme_requested.emit(theme_id)
         self._update_theme_management_buttons()
+
+    def accept(self) -> None:
+        try:
+            build_palette(self.result_theme())
+        except ValueError as error:
+            self._validation.setText(str(error))
+            self._validation.show()
+            return
+        try:
+            for theme in self._pending_deletions.values():
+                backup_theme_definition(theme)
+        except OSError as error:
+            self._validation.setText(f"Theme backup failed. No changes were saved: {error}")
+            self._validation.show()
+            return
+        self._validation.hide()
+        for theme_id in self._pending_deletions:
+            self.delete_theme_requested.emit(theme_id)
+        if self._default_theme_id != self._original_default_theme_id:
+            self.default_theme_requested.emit(self._default_theme_id)
+        self._pending_deletions.clear()
+        super().accept()
 
     def _on_preview_inputs_changed(self, *_args) -> None:
         if self._is_loading_theme:
@@ -376,8 +403,12 @@ class ThemeEditorDialog(QDialog):
     def _emit_preview(self) -> None:
         try:
             preview_theme = self.result_theme()
-        except ValueError:
+            build_palette(preview_theme)
+        except ValueError as error:
+            self._validation.setText(str(error))
+            self._validation.show()
             return
+        self._validation.hide()
         self.preview_requested.emit(preview_theme)
 
     def _reset_to_original(self) -> None:

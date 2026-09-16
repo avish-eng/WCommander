@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from multipane_commander.ui.terminal_commands import TerminalCommands
 import re
 
-from PySide6.QtCore import QEvent, QPoint, QTime, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QTime, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidgetItem,
     QMenu,
     QPushButton,
     QSizePolicy,
@@ -25,14 +25,13 @@ from multipane_commander.ui.command_history import (
 from multipane_commander.ui.command_history import (
     CommandHistoryList as _CommandHistoryList,
 )
-from multipane_commander.ui.command_history import PINNED_COMMAND_ROLE as _PINNED_COMMAND_ROLE
 from multipane_commander.ui.xterm_surface import WEB_TERMINAL_AVAILABLE, create_terminal_surface
 
 
 _MAX_HISTORY_ITEMS = 100
 
 
-class TerminalDock(QFrame):
+class TerminalDock(TerminalCommands, QFrame):
     maximize_requested = Signal()
     follow_active_pane_toggled = Signal(bool)
     commands_changed = Signal(object, object)
@@ -46,6 +45,7 @@ class TerminalDock(QFrame):
         visible: bool,
         follow_active_pane: bool,
         experimental_pty: bool = False,
+        prefer_pty: bool | None = None,
         recent_commands: list[str] | None = None,
         bookmarked_commands: list[str] | None = None,
         history_panel_visible: bool = False,
@@ -61,7 +61,9 @@ class TerminalDock(QFrame):
         self._current_directory = initial_directory
         # A real PTY is the natural backend for xterm. Keep the old setting as
         # an escape hatch, but prefer PTY automatically for the new surface.
-        self._experimental_pty = experimental_pty or WEB_TERMINAL_AVAILABLE
+        self._experimental_pty = (
+            experimental_pty or WEB_TERMINAL_AVAILABLE if prefer_pty is None else prefer_pty
+        )
         self._recent_commands = self._unique_commands(recent_commands or [])
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])
         self._trim_recent_commands()
@@ -73,7 +75,6 @@ class TerminalDock(QFrame):
         self._pty_ready_timer.timeout.connect(self._release_pty_input)
         self.session = self._build_session(initial_directory)
         self.output = create_terminal_surface()
-        self.output.command_submitted.connect(self._remember_command)
         self.output.terminal_resized.connect(self._resize_active_session)
         self.runtime_label = QLabel(self._runtime_description())
         self.follow_button = QPushButton()
@@ -120,7 +121,7 @@ class TerminalDock(QFrame):
             lambda _checked=False: self._force_kill_current_program()
         )
         self.more_menu.addSeparator()
-        self.pty_action = self.more_menu.addAction("Use PTY backend")
+        self.pty_action = self.more_menu.addAction("Use PTY on next launch")
         self.pty_action.setCheckable(True)
         self.pty_action.triggered.connect(self._toggle_experimental_pty)
         self.restart_action = self.more_menu.addAction("Restart shell")
@@ -228,19 +229,6 @@ class TerminalDock(QFrame):
             self._ensure_session_started()
             self.focus_input()
 
-    def inject_command(self, cwd: str, command: str) -> None:
-        """Navigate PTY to cwd and run command. Starts session if not running."""
-        path = Path(cwd)
-        self._current_directory = path
-        if not self._ensure_session_started():
-            self.setVisible(True)
-            self.focus_input()
-            return
-        self.session.change_directory(path)
-        self._run_command(command)
-        if not self.isVisible():
-            self.setVisible(True)
-            self.focus_input()
 
     def set_maximized(self, maximized: bool) -> None:
         self._is_maximized = maximized
@@ -270,6 +258,8 @@ class TerminalDock(QFrame):
             self.session.change_directory(path)
 
     def set_follow_active_pane(self, enabled: bool) -> None:
+        if not enabled:
+            self.session.cancel_directory_change()
         self._follow_active_pane = enabled
         self.follow_button.blockSignals(True)
         self.follow_button.setChecked(enabled)
@@ -296,9 +286,8 @@ class TerminalDock(QFrame):
             self.history_panel_visibility_changed.emit(visible)
 
     def restart_shell(self) -> None:
-        self.session.stop()
         self.output.clear()
-        self.session.start()
+        self.session.restart()
 
     def close_session(self) -> None:
         self.session.stop()
@@ -312,11 +301,7 @@ class TerminalDock(QFrame):
         if emit:
             self.experimental_pty_toggled.emit(enabled)
 
-    def recent_commands(self) -> list[str]:
-        return list(self._recent_commands)
 
-    def bookmarked_commands(self) -> list[str]:
-        return list(self._bookmarked_commands)
 
     def copy_selected_text(self) -> None:
         self.output.copy()
@@ -338,6 +323,8 @@ class TerminalDock(QFrame):
             self.output.inject_command(text, run=False)
 
     def _append_output(self, text: str) -> None:
+        if isinstance(text, bytes):
+            text = self._output_decoder.decode(text)
         self.output.append_output(text)
         if self.output.input_ready():
             return
@@ -345,6 +332,8 @@ class TerminalDock(QFrame):
             self._pty_ready_timer.start()
 
     def _handle_started(self) -> None:
+        self.output.set_submit_sequence(self.session.submit_bytes())
+        self.output.set_local_echo(not self.session.is_pty)
         self._refresh_backend_ui()
 
     def _runtime_description(self) -> str:
@@ -368,10 +357,11 @@ class TerminalDock(QFrame):
             "conpty": "ConPTY",
             "winpty": "WinPTY",
             "qprocess": "Fallback",
+            "pipe": "Pipe",
             "posix-pty": "POSIX PTY",
         }.get(backend_name, backend_name)
-        if not self._experimental_pty:
-            return "Stable", True, "Stable line-oriented terminal backend"
+        if backend_name == "pipe":
+            return "Pipe", True, "Active terminal backend: line-oriented pipe"
         if backend_name == "qprocess":
             return (
                 "Fallback",
@@ -388,24 +378,13 @@ class TerminalDock(QFrame):
         self.set_history_panel_visible(visible)
 
     def _toggle_experimental_pty(self, enabled: bool) -> None:
-        if enabled == self._experimental_pty:
-            return
-        self.session.stop()
-        self.output.clear()
-        self._experimental_pty = enabled
-        self.session = self._build_session(self._current_directory)
-        self._bind_session()
         self.set_experimental_pty(enabled)
-        self._ensure_session_started()
+        self._show_action_status("Backend preference saved for next launch")
 
-    def _rerun_last_command(self) -> None:
-        if not self._recent_commands:
-            return
-        self._run_command(self._recent_commands[0])
 
     def _force_kill_current_program(self) -> None:
         self._show_action_status("Kill captured")
-        self._append_output(f"\n[terminal] Kill captured for {self.session.backend_name}; forcing shell restart.\n")
+        self._append_output("\n[terminal] Interrupting the current program; stopping it if the prompt does not return.\n")
         self.session.force_kill_current_program()
         self.output.set_input_ready(True)
         self.output.clear_draft()
@@ -425,147 +404,18 @@ class TerminalDock(QFrame):
     def action_status_timer_start(self) -> None:
         self._action_status_timer.start()
 
-    def _remember_command(self, command: str) -> None:
-        cleaned = command.strip()
-        if not cleaned:
-            return
-        command_key = self._command_key(cleaned)
-        self._recent_commands = [
-            existing
-            for existing in self._recent_commands
-            if self._command_key(existing) != command_key
-        ]
-        self._recent_commands.insert(0, cleaned)
-        self._trim_recent_commands()
-        self._refresh_command_lists()
-        self._update_rerun_button()
-        self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
-    def _trim_recent_commands(self) -> None:
-        """Keep the history at `_MAX_HISTORY_ITEMS` visible rows, pinned first.
 
-        Pinned commands are never dropped, so they claim their slots first and
-        the oldest recent commands fall off the end. Recent entries shadowed by
-        a pin are kept but cost nothing: they are hidden while pinned and become
-        visible again on unpin.
-        """
-        pinned_keys = {
-            self._command_key(command) for command in self._bookmarked_commands
-        }
-        budget = max(0, _MAX_HISTORY_ITEMS - len(pinned_keys))
-        trimmed: list[str] = []
-        visible = 0
-        for command in self._recent_commands:
-            if self._command_key(command) in pinned_keys:
-                trimmed.append(command)
-                continue
-            if visible >= budget:
-                break
-            trimmed.append(command)
-            visible += 1
-        self._recent_commands = trimmed
 
-    def _refresh_command_lists(self) -> None:
-        self.command_list.clear()
-        pinned_keys = {
-            self._command_key(command) for command in self._bookmarked_commands
-        }
-        ordered_commands = [
-            (command, True) for command in self._bookmarked_commands
-        ] + [
-            (command, False)
-            for command in self._recent_commands
-            if self._command_key(command) not in pinned_keys
-        ]
-        for command, pinned in ordered_commands:
-            item = QListWidgetItem(command)
-            item.setSizeHint(QSize(0, 24))
-            item.setData(_PINNED_COMMAND_ROLE, pinned)
-            item.setToolTip(command)
-            self.command_list.addItem(item)
 
-    def _selected_command(self) -> str | None:
-        current_item = self.command_list.currentItem()
-        if current_item is not None:
-            return current_item.text()
-        text = self.output.current_draft().strip()
-        return text or None
 
-    def _selected_command_is_pinned(self) -> bool:
-        current_item = self.command_list.currentItem()
-        return bool(
-            current_item is not None
-            and current_item.data(_PINNED_COMMAND_ROLE)
-        )
 
-    def _run_clicked_command(self, item: QListWidgetItem) -> None:
-        self._run_command(item.text())
 
-    def _show_command_context_menu(self, position: QPoint) -> None:
-        item = self.command_list.itemAt(position)
-        if item is None:
-            menu = self._build_command_context_menu(None, pinned=False)
-        else:
-            self.command_list.setCurrentItem(item)
-            self.command_list.setFocus(Qt.FocusReason.MouseFocusReason)
-            menu = self._build_command_context_menu(
-                item.text(),
-                pinned=bool(item.data(_PINNED_COMMAND_ROLE)),
-            )
-        menu.exec(self.command_list.viewport().mapToGlobal(position))
 
-    def _build_command_context_menu(self, command: str | None, *, pinned: bool) -> QMenu:
-        menu = QMenu(self)
-        if command is not None:
-            use_action = menu.addAction("Use command")
-            use_action.triggered.connect(lambda _checked=False, value=command: self._use_command(value))
-            run_action = menu.addAction("Run command")
-            run_action.triggered.connect(lambda _checked=False, value=command: self._run_command(value))
-            menu.addSeparator()
 
-            if pinned:
-                unpin_action = menu.addAction("Unpin command")
-                unpin_action.triggered.connect(lambda _checked=False, value=command: self._remove_bookmark(value))
-            else:
-                pin_action = menu.addAction("Pin command")
-                pin_action.setEnabled(command not in self._bookmarked_commands)
-                pin_action.triggered.connect(lambda _checked=False, value=command: self._pin_command(value))
 
-            menu.addSeparator()
 
-        clear_action = menu.addAction("Clear history (keeps pinned)")
-        clear_action.setEnabled(bool(self._recent_commands))
-        clear_action.triggered.connect(lambda _checked=False: self._clear_command_history())
 
-        return menu
-
-    def _clear_command_history(self) -> None:
-        """Drop every recent command; pinned commands stay in the list."""
-        if not self._recent_commands:
-            return
-        self._recent_commands = []
-        self._refresh_command_lists()
-        self._update_rerun_button()
-        self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
-
-    def _use_selected_command(self) -> None:
-        command = self._selected_command()
-        if command is None:
-            return
-        self._use_command(command)
-
-    def _run_selected_command(self) -> None:
-        command = self._selected_command()
-        if command is None:
-            return
-        self._run_command(command)
-
-    def _use_command(self, command: str) -> None:
-        self.output.inject_command(command, run=False)
-        self.focus_input()
-
-    def _run_command(self, command: str) -> None:
-        self.output.inject_command(command, run=True)
 
     def _pin_current_command(self) -> None:
         command = self._selected_command()
@@ -573,30 +423,9 @@ class TerminalDock(QFrame):
             return
         self._pin_command(command)
 
-    def _pin_command(self, command: str) -> None:
-        if command in self._bookmarked_commands:
-            return
-        self._bookmarked_commands.append(command)
-        self._trim_recent_commands()
-        self._refresh_command_lists()
-        self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
-    def _remove_selected_bookmark(self) -> None:
-        current_item = self.command_list.currentItem()
-        if current_item is None or not current_item.data(_PINNED_COMMAND_ROLE):
-            return
-        self._remove_bookmark(current_item.text())
 
-    def _remove_bookmark(self, command: str) -> None:
-        if command not in self._bookmarked_commands:
-            return
-        self._bookmarked_commands.remove(command)
-        self._trim_recent_commands()
-        self._refresh_command_lists()
-        self.commands_changed.emit(self.recent_commands(), self.bookmarked_commands())
 
-    def _update_rerun_button(self) -> None:
-        self.rerun_action.setEnabled(bool(self._recent_commands))
 
     def _focus_first_command_list(self) -> None:
         if self.command_list.count() == 0:
@@ -604,28 +433,18 @@ class TerminalDock(QFrame):
         self.command_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.command_list.setCurrentRow(0)
 
-    def _unique_commands(self, commands: list[str]) -> list[str]:
-        unique: list[str] = []
-        seen: set[str] = set()
-        for command in commands:
-            cleaned = command.strip()
-            command_key = self._command_key(cleaned)
-            if not cleaned or command_key in seen:
-                continue
-            unique.append(cleaned)
-            seen.add(command_key)
-        return unique
 
-    def _command_key(self, command: str) -> str:
-        return command.strip()
 
     def _build_session(self, initial_directory: Path) -> TerminalSession:
         return TerminalSession(initial_directory=initial_directory, experimental_pty=self._experimental_pty)
 
     def _bind_session(self) -> None:
+        import codecs
+        self._prompt_was_ready = self.session.at_prompt
+        self._output_decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.output.set_sender(self.session.write_bytes)
         self.output.set_submit_sequence(self.session.submit_bytes())
-        local_echo = self.session.backend_name == "qprocess"
+        local_echo = not self.session.is_pty
         self.output.set_local_echo(local_echo)
         immediate_input = bool(getattr(self.output, "accepts_immediate_input", False))
         self.output.set_input_ready(local_echo or immediate_input)
@@ -633,6 +452,13 @@ class TerminalDock(QFrame):
         self._refresh_backend_ui()
         self.session.output_received.connect(self._append_output)
         self.session.started.connect(self._handle_started)
+        self.session.command_detected.connect(self._remember_command)
+        self.session.prompt_changed.connect(self._handle_prompt_changed)
+
+    def _handle_prompt_changed(self, at_prompt: bool) -> None:
+        if at_prompt and not self._prompt_was_ready:
+            self.output.clear_draft()
+        self._prompt_was_ready = at_prompt
 
     def _resize_active_session(self, cols: int, rows: int) -> None:
         self.session.resize(cols, rows)

@@ -70,6 +70,8 @@ def test_theme_editor_can_make_selected_theme_default() -> None:
     assert dialog.make_default_button.isEnabled()
     dialog.make_default_button.click()
 
+    assert requested == []
+    dialog.accept()
     assert requested == [builtins[0].id]
     assert not dialog.make_default_button.isEnabled()
     assert dialog.make_default_button.text() == "Default"
@@ -100,6 +102,9 @@ def test_theme_editor_deletes_custom_theme(monkeypatch) -> None:
     assert dialog.delete_theme_button.isEnabled()
     dialog.delete_theme_button.click()
 
+    assert deleted == []
+    assert backed_up == []
+    dialog.accept()
     assert deleted == [custom.id]
     assert backed_up == [custom]
     assert dialog.theme_choice.findData(custom.id) == -1
@@ -130,6 +135,9 @@ def test_theme_editor_can_delete_builtin_theme(monkeypatch) -> None:
 
     dialog.delete_theme_button.click()
 
+    assert deleted == []
+    assert backed_up == []
+    dialog.accept()
     assert deleted == [builtins[0].id]
     assert backed_up == [builtins[0]]
     assert dialog.theme_choice.findData(builtins[0].id) == -1
@@ -172,19 +180,16 @@ def test_theme_editor_keeps_theme_when_backup_fails(monkeypatch) -> None:
         "multipane_commander.ui.theme_editor.backup_theme_definition",
         fail_backup,
     )
-    errors: list[dict] = []
-    monkeypatch.setattr(
-        "multipane_commander.ui.theme_editor.show_message",
-        lambda **kwargs: errors.append(kwargs),
-    )
     deleted: list[str] = []
     dialog.delete_theme_requested.connect(deleted.append)
 
     dialog.delete_theme_button.click()
+    dialog.accept()
 
     assert deleted == []
-    assert dialog.theme_choice.findData(custom.id) >= 0
-    assert errors and errors[0]["title"] == "Theme backup failed"
+    assert custom.id in dialog._pending_deletions
+    assert "Theme backup failed" in dialog._validation.text()
+    assert dialog.result() != dialog.DialogCode.Accepted
 
 
 def test_main_window_persists_new_default_theme(monkeypatch) -> None:

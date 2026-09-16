@@ -279,4 +279,6 @@ def test_shift_enter_emits_escalate(tmp_path: Path) -> None:
     assert len(escalated) == 1
     assert escalated[0][0] == str(tmp_path)
     assert escalated[0][1] == "vim README.md"
+    assert bar._input.text() == "vim README.md"
+    bar.terminal_command_accepted(escalated[0][1])
     assert bar._input.text() == ""

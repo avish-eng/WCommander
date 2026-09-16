@@ -234,13 +234,18 @@ class AiPaletteDialog(QDialog):
 
     def reject(self) -> None:
         # Called by Escape — cancel any in-flight session and hide
-        if self._session_id is not None:
-            self._runner.cancel(self._session_id)
-            self._session_id = None
+        self._cancel_and_reset()
         self.hide()
 
-    def closeEvent(self, event) -> None:  # type: ignore[override]
+    def _cancel_and_reset(self) -> None:
         if self._session_id is not None:
             self._runner.cancel(self._session_id)
             self._session_id = None
+            self._status.setText("Cancelled.")
+        self._spinner.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._send_btn.setEnabled(True)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._cancel_and_reset()
         super().closeEvent(event)
