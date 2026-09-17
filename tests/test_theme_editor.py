@@ -53,6 +53,13 @@ def test_reference_inspired_builtin_themes_are_available_and_valid() -> None:
         assert stylesheet
 
 
+def test_primary_dialog_buttons_use_a_blue_background() -> None:
+    for theme in builtin_themes():
+        stylesheet = build_stylesheet(theme)
+        assert 'QPushButton[dialogRole="primary"]' in stylesheet
+        assert "background: #2563EB;" in stylesheet
+
+
 def test_theme_editor_can_make_selected_theme_default() -> None:
     _qapp()
     builtins = builtin_themes()

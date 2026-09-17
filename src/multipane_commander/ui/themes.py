@@ -4,6 +4,12 @@ from dataclasses import dataclass
 
 from multipane_commander.config.model import ThemeDefinition
 
+PRIMARY_BUTTON_BG = "#2563EB"
+PRIMARY_BUTTON_HOVER_BG = "#3B82F6"
+PRIMARY_BUTTON_PRESSED_BG = "#1D4ED8"
+PRIMARY_BUTTON_BORDER = "#1E40AF"
+PRIMARY_BUTTON_TEXT = "#FFFFFF"
+
 
 def _normalize_hex(value: str) -> str:
     color = value.strip()
@@ -1086,16 +1092,20 @@ QPushButton#terminalHistoryActionButton:pressed {{
     background: {palette.button_pressed_bg};
 }}
 QPushButton[dialogRole="primary"] {{
-    background: {palette.secondary_button_active_bg};
-    color: {palette.secondary_button_active_text};
-    border-color: {palette.secondary_button_active_border};
+    background: {PRIMARY_BUTTON_BG};
+    color: {PRIMARY_BUTTON_TEXT};
+    border-color: {PRIMARY_BUTTON_BORDER};
     min-width: 140px;
     padding: 8px 14px;
     font-weight: 600;
 }}
 QPushButton[dialogRole="primary"]:hover {{
-    background: {palette.button_hover_bg};
-    border-color: {palette.button_hover_border};
+    background: {PRIMARY_BUTTON_HOVER_BG};
+    border-color: {PRIMARY_BUTTON_BORDER};
+    color: {PRIMARY_BUTTON_TEXT};
+}}
+QPushButton[dialogRole="primary"]:pressed {{
+    background: {PRIMARY_BUTTON_PRESSED_BG};
 }}
 QPushButton[dialogRole="primary"]:focus,
 QPushButton[dialogRole="secondary"]:focus {{
