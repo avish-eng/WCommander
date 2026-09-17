@@ -53,7 +53,7 @@ def _patch_terminals(monkeypatch) -> list[FakeDeepSession]:
     monkeypatch.setattr(TerminalDock, "_build_session", classic_session)
     monkeypatch.setattr(
         "multipane_commander.ui.terminal_dock.create_terminal_surface",
-        lambda parent=None: TerminalSurface(),
+        lambda parent=None, **_kwargs: TerminalSurface(),
     )
     monkeypatch.setattr(
         "multipane_commander.ui.terminal_dock.WEB_TERMINAL_AVAILABLE",
@@ -95,6 +95,40 @@ def test_main_window_uses_deep_terminal_by_default(tmp_path: Path, monkeypatch) 
         assert window._terminal_dock_engine() == "deep"
         assert len(sessions) == 1
         assert sessions[0].starts == 0
+    finally:
+        window.close()
+
+
+def test_main_window_passes_gpu_renderer_preference_to_dock(tmp_path: Path, monkeypatch) -> None:
+    _patch_terminals(monkeypatch)
+    config = AppConfig()
+    config.show_terminal = False
+    config.terminal.engine = "deep"
+    config.terminal.gpu_renderer = True
+    window = _make_window(tmp_path, config=config)
+    try:
+        assert window.terminal_dock._gpu_renderer is True
+    finally:
+        window.close()
+
+
+def test_main_window_passes_terminal_font_to_dock(tmp_path: Path, monkeypatch) -> None:
+    _patch_terminals(monkeypatch)
+    config = AppConfig()
+    config.show_terminal = False
+    config.terminal.engine = "deep"
+    config.terminal.font_family = "Consolas"
+    config.terminal.font_size = 15
+    window = _make_window(tmp_path, config=config)
+    try:
+        assert window.terminal_dock._font_family == "Consolas"
+        assert window.terminal_dock._base_font_size == 15
+
+        window._persist_terminal_font_size(18)
+        window._persist_terminal_font_family("Cascadia Mono")
+
+        assert load_config().terminal.font_size == 18
+        assert load_config().terminal.font_family == "Cascadia Mono"
     finally:
         window.close()
 

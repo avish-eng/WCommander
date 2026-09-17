@@ -34,7 +34,6 @@ from multipane_commander.services.jobs.manager import JobManager
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
 from multipane_commander.services.undo import UndoRecord, UndoStack
 from multipane_commander.platform import root_paths, root_section_label, same_filesystem
-from multipane_commander.ui.command_bar import CommandBar
 from multipane_commander.ui.env_path_dialog import EnvPathDialog
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.shortcuts import bind_window_shortcuts
@@ -170,7 +169,6 @@ class MainWindow(QMainWindow):
         self._ai_pane: AiPane | None = None
         self._claude_cache: ClaudeSessionCache | None = None
         self.root_layout: QVBoxLayout | None = None
-        self.command_bar: CommandBar | None = None
         self.panes_host: QWidget | None = None
         self.function_bar: QWidget | None = None
         self.pane_splitter: QSplitter | None = None
@@ -190,11 +188,13 @@ class MainWindow(QMainWindow):
             follow_active_pane=self.context.config.follow_active_pane_terminal,
             experimental_pty=self.context.config.terminal.experimental_pty,
             prefer_pty=self.context.config.terminal.prefer_pty,
+            gpu_renderer=self.context.config.terminal.gpu_renderer,
+            font_family=self.context.config.terminal.font_family,
+            font_size=self.context.config.terminal.font_size,
             recent_commands=self.context.config.terminal.recent_commands,
             bookmarked_commands=self.context.config.terminal.bookmarked_commands,
             history_panel_visible=self.context.config.terminal.history_panel_visible,
         )
-        self._terminal_engine = self._terminal_dock_engine()
         self.setWindowTitle("Multi-Pane Commander")
         self.resize(self.context.state.window.width, self.context.state.window.height)
         self.setMinimumSize(1000, 700)
@@ -211,7 +211,6 @@ class MainWindow(QMainWindow):
         ):
             self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self._bind_shortcuts()
-        self._bind_command_bar()
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
         self._bind_job_signals()
         self.bookmark_store.bookmarks_changed.connect(self._persist_bookmarks)
@@ -354,25 +353,6 @@ class MainWindow(QMainWindow):
     def _bind_shortcuts(self) -> None:
         bind_window_shortcuts(self)
 
-    def _bind_command_bar(self) -> None:
-        if self.command_bar is None:
-            return
-        for pane_view in self.pane_views:
-            pane_view.current_directory_changed.connect(
-                lambda path, pane=pane_view: self._on_pane_directory_changed(pane, path)
-            )
-            pane_view.file_list.installEventFilter(self)
-        self.command_bar.navigate_requested.connect(self._navigate_active_pane)
-        self.command_bar.refresh_requested.connect(self._refresh_active_pane)
-        self.command_bar.escalate_requested.connect(
-            self._run_command_bar_in_terminal
-        )
-        self.command_bar.set_cwd(self._active_pane().current_directory())
-
-    def _run_command_bar_in_terminal(self, cwd: str, command: str) -> None:
-        if self.terminal_dock.inject_command(cwd, command) and self.command_bar is not None:
-            self.command_bar.terminal_command_accepted(command)
-
     def _bind_job_signals(self) -> None:
         self.job_manager.job_changed.connect(self.jobs_view.upsert_snapshot)
         self.job_manager.job_removed.connect(self.jobs_view.remove_snapshot)
@@ -385,6 +365,8 @@ class MainWindow(QMainWindow):
         dock.commands_changed.connect(self._persist_terminal_commands)
         dock.history_panel_visibility_changed.connect(self._persist_terminal_history_panel_visible)
         dock.experimental_pty_toggled.connect(self._persist_terminal_experimental_pty)
+        dock.font_size_changed.connect(self._persist_terminal_font_size)
+        dock.font_family_changed.connect(self._persist_terminal_font_family)
 
     def _terminal_dock_engine(self) -> str:
         if type(self.terminal_dock).__name__ == "DeepTerminalDock":
@@ -399,6 +381,13 @@ class MainWindow(QMainWindow):
         persist_app_context(self.context)
         self.terminal_dock._show_action_status(
             "Terminal mode saved for next launch; current session stays open"
+        )
+
+    def _set_gpu_renderer(self, enabled: bool) -> None:
+        self.context.config.terminal.gpu_renderer = bool(enabled)
+        persist_app_context(self.context)
+        self.terminal_dock._show_action_status(
+            "GPU renderer saved for next launch; restart to apply"
         )
 
     def _persist_bookmarks(self, bookmarks: list[Path]) -> None:
@@ -425,6 +414,14 @@ class MainWindow(QMainWindow):
     def _persist_terminal_experimental_pty(self, enabled: bool) -> None:
         self.context.config.terminal.experimental_pty = enabled
         self.context.config.terminal.prefer_pty = enabled
+        persist_app_context(self.context)
+
+    def _persist_terminal_font_size(self, size: int) -> None:
+        self.context.config.terminal.font_size = max(6, min(40, int(size)))
+        persist_app_context(self.context)
+
+    def _persist_terminal_font_family(self, family: str) -> None:
+        self.context.config.terminal.font_family = family.strip()
         persist_app_context(self.context)
 
     def _apply_selected_theme(self) -> None:
@@ -589,8 +586,6 @@ class MainWindow(QMainWindow):
             new_active.focus_list()
         self._sync_terminal_to_pane_directory(new_active, new_active.current_directory())
         self._sync_quick_view(new_active)
-        if self.command_bar is not None:
-            self.command_bar.set_cwd(new_active.current_directory())
 
     def _sync_terminal_to_pane_directory(self, pane_view: PaneView, path: Path) -> None:
         if pane_view is not self._active_pane():
@@ -648,16 +643,8 @@ class MainWindow(QMainWindow):
     def _refresh_active_pane(self) -> None:
         self._active_pane().refresh()
 
-    def _focus_command_bar(self) -> None:
-        if self.command_bar is not None:
-            self.command_bar.focus_input()
-
     def _navigate_active_pane(self, path: Path) -> None:
         self._active_pane().navigate_to(path)
-
-    def _on_pane_directory_changed(self, pane_view: PaneView, path: Path) -> None:
-        if pane_view is self._active_pane() and self.command_bar is not None:
-            self.command_bar.set_cwd(path)
 
     def _new_tab_in_active_pane(self) -> None:
         self._active_pane().open_new_tab()
@@ -976,6 +963,15 @@ class MainWindow(QMainWindow):
             lambda _checked=False: self._set_terminal_engine(ENGINE_CLASSIC)
         )
         engine_menu.addAction(classic_engine_action)
+        engine_menu.addSeparator()
+        gpu_renderer_action = QAction("GPU renderer (WebGL, next launch)", self)
+        gpu_renderer_action.setCheckable(True)
+        gpu_renderer_action.setChecked(self.context.config.terminal.gpu_renderer)
+        gpu_renderer_action.setToolTip(
+            "Off: crisp DOM text (recommended). On: WebGL renderer for very high output throughput."
+        )
+        gpu_renderer_action.triggered.connect(self._set_gpu_renderer)
+        engine_menu.addAction(gpu_renderer_action)
 
         popup_point = QCursor.pos()
         menu_size = menu.sizeHint()
@@ -1446,31 +1442,6 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowActivate:
             self._refresh_all_panes()
         return super().event(event)
-
-    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
-        from PySide6.QtGui import QKeyEvent
-        if (
-            event.type() == QEvent.Type.KeyPress
-            and self.command_bar is not None
-            and isinstance(event, QKeyEvent)
-        ):
-            pane_file_lists = [pv.file_list for pv in self.pane_views]
-            if obj in pane_file_lists:
-                key = event.key()
-                mods = event.modifiers()
-                ctrl = Qt.KeyboardModifier.ControlModifier
-                alt = Qt.KeyboardModifier.AltModifier
-                is_printable = (
-                    key >= Qt.Key.Key_Space
-                    and key <= Qt.Key.Key_AsciiTilde
-                    and not (mods & ctrl)
-                    and not (mods & alt)
-                )
-                if is_printable:
-                    char = event.text()
-                    self.command_bar.focus_input(initial_text=char)
-                    return False  # let the file_list also handle it normally
-        return super().eventFilter(obj, event)
 
     def _on_focus_changed(self, _old, _now) -> None:
         self._update_terminal_tab_shortcuts()

@@ -17,6 +17,16 @@ _PROMPT_SUFFIX_RE = re.compile(r"[$#%❯➜]\s?$")
 _PROMPT_PREFIX_RE = re.compile(r"^\s*[➜❯]\s")
 _CONTINUATION_RE = re.compile(r"(?:>>|More\?)\s?$")
 _PYTHON_REPL_RE = re.compile(r"(?:>>>|\.\.\.)\s?$")
+_FILESYSTEM_CWD_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|/)")
+
+
+def _looks_like_gt_prompt(line: str) -> bool:
+    trimmed = line.rstrip()
+    if not trimmed.endswith(">") or len(trimmed) > 160:
+        return False
+    if "@" in trimmed:
+        return True
+    return trimmed[:1] in {"(", "[", "{"}
 
 
 def looks_like_prompt(line: str) -> bool:
@@ -24,7 +34,10 @@ def looks_like_prompt(line: str) -> bool:
 
     Deliberately conservative. It must not fire for continuation prompts
     (`>` / `>>` / `More?`) or the Python REPL, because the terminal only
-    injects a directory change when the shell is idle.
+    injects a directory change when the shell is idle. A trailing `>` is
+    accepted only when the line carries another prompt signal (`user@host`,
+    a leading bracket/paren, or a space after the `>`), which covers fish
+    and most custom themes without matching arbitrary output.
     """
     cleaned = line.rstrip("\r\n")
     if not cleaned:
@@ -35,7 +48,9 @@ def looks_like_prompt(line: str) -> bool:
         return True
     if _PROMPT_PREFIX_RE.match(cleaned):
         return True
-    return bool(_PROMPT_SUFFIX_RE.search(cleaned))
+    if _PROMPT_SUFFIX_RE.search(cleaned):
+        return True
+    return _looks_like_gt_prompt(cleaned)
 
 
 @dataclass
@@ -167,11 +182,16 @@ class ShellIntegrationParser:
             self.state.at_prompt = True
             self.state.command_running = False
             # Standard Windows prompts report the directory even without OSC.
+            # Only filesystem locations are accepted; PowerShell drives such
+            # as HKLM: are not directories the pane can follow.
             line = self.last_line().strip()
+            candidate: str | None = None
             if _PS_PROMPT_RE.match(line):
-                self.state.cwd = line[3:-1]
+                candidate = line[3:-1]
             elif _CMD_PROMPT_RE.match(line) or _UNC_PROMPT_RE.match(line):
-                self.state.cwd = line[:-1]
+                candidate = line[:-1]
+            if candidate and _FILESYSTEM_CWD_RE.match(candidate):
+                self.state.cwd = candidate
 
     def _consume_osc(self, stream: str, start: int) -> int:
         index = start + 2

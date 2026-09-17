@@ -38,7 +38,6 @@ Tested primarily on macOS; Linux and Windows should also work — platform-speci
 │ Active pane — file list              │ Passive pane      │
 │  cursor row, marks, breadcrumb       │  (peer)           │
 ├──────────────────────────────────────┴───────────────────┤
-│ Command bar   pwd> _                                     │
 │ Embedded terminal (toggle with F9)                       │
 │ F1 Help  F3 View  F4 Edit  F5 Copy  F6 Move  F7 MkDir … │
 └──────────────────────────────────────────────────────────┘
@@ -195,13 +194,13 @@ Computes recursive size and updates the Size column. Synchronous, capped at 50 0
 
 ---
 
-## 9. Terminal & command bar
+## 9. Terminal
 
 ### Embedded terminal — `F9` (alias `Ctrl+\``)
 
 A shell docked at the bottom of the window. **Standard terminal** and **Classic controls** share the terminal backend, command dispatch, history, and bundled xterm.js renderer. Classic controls also support a Qt text fallback when WebEngine is unavailable.
 
-Choose a preference from **Layout (F11) → Terminal compatibility (next launch)**. Mode and PTY preference changes take effect on the next launch, preserving the current session and output.
+Choose a preference from **Layout (F11) → Terminal compatibility (next launch)**. Mode, PTY preference, and the GPU/WebGL renderer setting take effect on the next launch, preserving the current session and output. Text uses the crisp DOM renderer by default; enable the GPU renderer only if very high output throughput matters more than sharpness.
 
 - **Follow active pane** is on by default. Directory changes wait until the shell is at a detected prompt with no unfinished input. Switching to **Independent** cancels a pending directory change. Shell-integration sequences (OSC 7/9;9/133) improve prompt and directory detection when your shell emits them.
 - Showing the terminal moves focus to it, so `F9` doubles as "focus terminal" once it's open.
@@ -213,24 +212,15 @@ Choose a preference from **Layout (F11) → Terminal compatibility (next launch)
 | `Ctrl+Enter` | Paste the cursor item's **name** into the terminal (quoted if needed) |
 | `Alt+Enter` | Paste the cursor item's **full path** into the terminal |
 | `Ctrl+Shift+K` | Force-kill the program currently running in the terminal |
-| `Ctrl+F` | Search terminal output (standard terminal; `Enter`/`Shift+Enter` cycle matches) |
+| `Ctrl+F` | Search terminal output; all matches highlighted (`Enter`/`Shift+Enter` cycle matches) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Font zoom (standard terminal) |
 | `Ctrl+Insert` / `Shift+Insert` | Copy / paste (standard terminal) |
 | `Ctrl+C` | Copy when text is selected, otherwise send interrupt |
 | `Ctrl+V` | Paste into the terminal |
 
-Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart. The **History** button opens the commands panel: double-click to run, `Enter` to load, and the context menu pins, unpins or clears entries. Commands launched through the app or explicitly reported by shell integration are saved. Ordinary terminal keystrokes, including input to child programs, are not recorded as command history. Running or loading a saved command requires an idle shell with an empty prompt.
+The **⋯** menu has **Font family** (any installed fixed-pitch family; the default is **Consolas at 14px**, with Cascadia Mono and platform fallbacks), **Increase/Decrease/Reset font size**, and font zoom persists across restarts. `Ctrl+=` / `Ctrl+-` / `Ctrl+0` do the same from the keyboard. Terminal text uses grayscale antialiasing, which keeps glyph stems even at Windows display scaling.
 
-### Command bar — `Ctrl+G`
-
-A persistent one-liner above the F-key bar that always shows the active pane's directory as a prompt.
-
-- **Activate**: click it, press `Ctrl+G`, or just start typing while a pane has focus
-- **Enter** — runs the command inline; output streams into a collapsible panel above the input. The active pane refreshes on process exit
-- `cd <dir>` is intercepted and navigates the **active pane** instead of spawning a subprocess; bare `cd` goes to home
-- **Shift+Enter** — requests execution in the full terminal using the active pane's directory. A busy shell, unfinished input, or invalid directory prevents dispatch and leaves the command text available for retry
-- `↑` / `↓` cycle session command history (no persistence)
-- `Esc` dismisses the output panel; pressing it again clears the input; again returns focus to the pane
+Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart. The **History** button opens the commands panel: double-click to run, `Enter` to load, and the context menu pins, unpins or clears entries. Commands typed at an idle shell prompt are recorded; input typed into a running program (passwords, pager keys, etc.) is never saved. Running or loading a saved command requires an idle shell with an empty prompt.
 
 ---
 

@@ -63,15 +63,53 @@ def _asset_directory() -> Path:
     return Path(__file__).resolve().parents[2] / "assets" / "xterm"
 
 
-@lru_cache(maxsize=1)
-def build_deep_terminal_html() -> str:
+def _read_bundle(name: str) -> str:
+    text = (_asset_directory() / name).read_text(encoding="utf-8")
+    return text.replace("</script>", "<\\/script>")
+
+
+_DEFAULT_FONT_FAMILY = (
+    'Consolas, Cascadia Mono, "SF Mono", Menlo, Monaco, "DejaVu Sans Mono", '
+    '"Courier New", monospace'
+)
+_DEFAULT_FONT_SIZE = 14
+XTERM_VERSION = "6.0.0"
+_MIN_FONT_SIZE = 6
+_MAX_FONT_SIZE = 40
+
+
+def _clamp_font_size(size: int) -> int:
+    return max(_MIN_FONT_SIZE, min(_MAX_FONT_SIZE, int(size)))
+
+
+@lru_cache(maxsize=8)
+def build_deep_terminal_html(
+    gpu_renderer: bool = False,
+    font_family: str = "",
+    font_size: int = _DEFAULT_FONT_SIZE,
+) -> str:
     asset_dir = _asset_directory()
     css = (asset_dir / "xterm.min.css").read_text(encoding="utf-8")
-    xterm_js = (asset_dir / "xterm.min.js").read_text(encoding="utf-8").replace(
-        "</script>", "<\\/script>"
-    )
-    fit_js = (asset_dir / "xterm-addon-fit.min.js").read_text(encoding="utf-8").replace(
-        "</script>", "<\\/script>"
+    xterm_js = _read_bundle("xterm.min.js")
+    fit_js = _read_bundle("xterm-addon-fit.min.js")
+    unicode11_js = _read_bundle("xterm-addon-unicode11.min.js")
+    search_js = _read_bundle("xterm-addon-search.min.js")
+    web_links_js = _read_bundle("xterm-addon-web-links.min.js")
+    webgl_js = _read_bundle("xterm-addon-webgl.min.js")
+    resolved_family = font_family.strip() or _DEFAULT_FONT_FAMILY
+    resolved_size = _clamp_font_size(font_size)
+    # The DOM renderer draws text through Chromium's normal text stack and is
+    # visibly crisper at fractional display scaling; WebGL renders glyphs from
+    # a texture atlas and is only worth it for very high output throughput.
+    webgl_script = f"<script>{webgl_js}</script>\n" if gpu_renderer else ""
+    webgl_load = (
+        "  try {\n"
+        "    var webgl = new WebglAddon.WebglAddon();\n"
+        "    webgl.onContextLoss(function () { webgl.dispose(); });\n"
+        "    term.loadAddon(webgl);\n"
+        "  } catch (webglError) {}\n"
+        if gpu_renderer
+        else ""
     )
     return f"""<!DOCTYPE html>
 <html>
@@ -89,30 +127,106 @@ html, body {{ width: 100%; height: 100%; overflow: hidden; background: #111827; 
 <div id="terminal"></div>
 <script>{xterm_js}</script>
 <script>{fit_js}</script>
-<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>{unicode11_js}</script>
+<script>{search_js}</script>
+<script>{web_links_js}</script>
+{webgl_script}<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script>
 (function () {{
   var terminalElement = document.getElementById('terminal');
+  var defaultFontSize = {resolved_size};
   var term = new Terminal({{
-    fontFamily: 'Cascadia Mono, Consolas, "SF Mono", Menlo, Monaco, "Courier New", monospace',
-    fontSize: 13,
+    allowProposedApi: true,
+    fontFamily: {_json_literal(resolved_family)},
+    fontSize: {resolved_size},
     lineHeight: 1.15,
     letterSpacing: 0,
     cursorBlink: true,
     cursorStyle: 'block',
+    cursorInactiveStyle: 'outline',
     scrollback: 50000,
     convertEol: false,
     allowTransparency: false,
     macOptionIsMeta: true,
     smoothScrollDuration: 80,
     fastScrollModifier: 'alt',
+    rescaleOverlappingGlyphs: true,
+    scrollOnUserInput: true,
     windowsPty: {{}},
+    linkHandler: {{
+      activate: function (_event, text) {{ if (bridge) bridge.open_link(text); }}
+    }},
     theme: {_theme_literal(_DEFAULT_THEME)}
   }});
   var fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  try {{
+    var unicode11 = new Unicode11Addon.Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = '11';
+  }} catch (unicodeError) {{}}
+  var searchAddon = new SearchAddon.SearchAddon({{ highlightLimit: 2000 }});
+  term.loadAddon(searchAddon);
+  searchAddon.onDidChangeResults(function (event) {{
+    if (bridge) bridge.search_results(event.resultCount, event.resultIndex);
+  }});
+  try {{
+    var webLinks = new WebLinksAddon.WebLinksAddon(function (_event, uri) {{
+      if (bridge) bridge.open_link(uri);
+    }});
+    term.loadAddon(webLinks);
+  }} catch (linkError) {{}}
   term.open(terminalElement);
-  window.mpcTerminal = term;
+{webgl_load}  window.mpcTerminal = term;
+
+  var logicalFontSize = defaultFontSize;
+  var baseLineHeight = 1.15;
+  var baseLetterSpacing = 0;
+  var lastDevicePixelRatio = window.devicePixelRatio || 1;
+
+  function measureAdvance(family, size) {{
+    var probe = document.createElement('span');
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    probe.style.whiteSpace = 'pre';
+    probe.style.fontFamily = family;
+    probe.style.fontSize = size + 'px';
+    probe.textContent = new Array(101).join('M');
+    document.body.appendChild(probe);
+    var advance = probe.getBoundingClientRect().width / 100;
+    document.body.removeChild(probe);
+    return advance;
+  }}
+
+  // At fractional display scaling (Windows 120%/150%) a monospace grid lands
+  // glyphs on shifting subpixel phases, producing uneven stems and clipped
+  // digit tops. Snapping the glyph ppem, character advance and cell height to
+  // whole device pixels keeps every cell pixel-aligned while the logical size
+  // (what zoom and config store) stays an integer.
+  function snapTerminalMetrics() {{
+    var dpr = window.devicePixelRatio || 1;
+    lastDevicePixelRatio = dpr;
+    var fractional = Math.abs(dpr - Math.round(dpr)) > 0.001;
+    if (!fractional) {{
+      term.options.fontSize = logicalFontSize;
+      term.options.letterSpacing = baseLetterSpacing;
+      term.options.lineHeight = baseLineHeight;
+      return;
+    }}
+    var devicePixels = Math.max(1, Math.round(logicalFontSize * dpr));
+    var cssSize = devicePixels / dpr;
+    term.options.fontSize = cssSize;
+    var advance = measureAdvance(term.options.fontFamily, cssSize);
+    if (advance > 0) {{
+      term.options.letterSpacing = Math.round(advance * dpr) / dpr - advance;
+    }}
+    term.options.lineHeight = Math.max(
+      devicePixels,
+      Math.round(cssSize * baseLineHeight * dpr)
+    ) / (cssSize * dpr);
+  }}
+
+  snapTerminalMetrics();
 
   function decodeBase64(value) {{
     var binary = atob(value);
@@ -128,73 +242,51 @@ html, body {{ width: 100%; height: 100%; overflow: hidden; background: #111827; 
     return btoa(binary);
   }}
 
-  var searchQuery = null;
-  var searchCase = false;
-  var searchMatches = [];
-  var searchIndex = -1;
-
-  function clearSearch() {{
-    searchQuery = null;
-    searchMatches = [];
-    searchIndex = -1;
-    if (term.hasSelection()) term.clearSelection();
-  }}
-
-  function scanMatches(query, caseSensitive) {{
-    searchMatches = [];
-    searchIndex = -1;
-    searchQuery = query;
-    searchCase = caseSensitive;
-    if (!query) return;
-    var needle = caseSensitive ? query : query.toLowerCase();
-    var buffer = term.buffer.active;
-    for (var row = 0; row < buffer.length; row++) {{
-      var line = buffer.getLine(row);
-      if (!line) continue;
-      var text = line.translateToString(true);
-      var haystack = caseSensitive ? text : text.toLowerCase();
-      var index = haystack.indexOf(needle);
-      while (index !== -1) {{
-        searchMatches.push({{row: row, column: index, length: query.length}});
-        index = haystack.indexOf(needle, index + Math.max(1, needle.length));
-      }}
+  var searchOptions = {{
+    decorations: {{
+      matchBackground: '#4a3b00',
+      matchBorder: '#c8a600',
+      matchOverviewRuler: '#c8a600',
+      activeMatchBackground: '#c8a600',
+      activeMatchBorder: '#ffd000',
+      activeMatchColorOverviewRuler: '#ffd000'
     }}
-  }}
-
-  window.mpcSearch = function (query, direction, caseSensitive) {{
-    if (!query) {{ clearSearch(); return JSON.stringify({{count: 0, index: -1}}); }}
-    if (query !== searchQuery || caseSensitive !== searchCase) {{
-      scanMatches(query, caseSensitive);
-    }}
-    if (!searchMatches.length) {{
-      if (term.hasSelection()) term.clearSelection();
-      return JSON.stringify({{count: 0, index: -1}});
-    }}
-    searchIndex += direction < 0 ? -1 : 1;
-    if (searchIndex < 0) searchIndex = searchMatches.length - 1;
-    if (searchIndex >= searchMatches.length) searchIndex = 0;
-    var match = searchMatches[searchIndex];
-    term.select(match.column, match.row, match.length);
-    term.scrollToLine(match.row);
-    return JSON.stringify({{count: searchMatches.length, index: searchIndex}});
   }};
 
-  window.mpcClearSearch = function () {{ clearSearch(); }};
+  window.mpcSearch = function (query, direction, caseSensitive) {{
+    if (!query) {{ window.mpcClearSearch(); return; }}
+    var options = {{
+      caseSensitive: !!caseSensitive,
+      decorations: searchOptions.decorations
+    }};
+    try {{
+      if (direction < 0) searchAddon.findPrevious(query, options);
+      else searchAddon.findNext(query, options);
+    }} catch (searchError) {{}}
+  }};
+
+  window.mpcClearSearch = function () {{
+    try {{
+      searchAddon.clearDecorations();
+      searchAddon.clearActiveDecoration();
+    }} catch (searchError) {{}}
+  }};
   window.mpcGetSelection = function () {{ return term.getSelection(); }};
   window.mpcSelectAll = function () {{ term.selectAll(); }};
   window.mpcClear = function () {{ term.clear(); }};
   window.mpcReset = function () {{ term.reset(); }};
   window.mpcFocus = function () {{ term.focus(); }};
-  window.mpcGetFontSize = function () {{ return term.options.fontSize || 13; }};
+  window.mpcGetFontSize = function () {{ return logicalFontSize; }};
   window.mpcSetFontSize = function (size) {{
-    size = Math.max(6, Math.min(40, Math.round(size)));
-    term.options.fontSize = size;
+    logicalFontSize = Math.max(6, Math.min(40, Math.round(size)));
+    snapTerminalMetrics();
     try {{ fit.fit(); }} catch (error) {{}}
-    if (bridge) bridge.notify_font_size(size);
-    return size;
+    if (bridge) bridge.notify_font_size(logicalFontSize);
+    return logicalFontSize;
   }};
   window.mpcSetFontFamily = function (family) {{
     if (family) term.options.fontFamily = family;
+    snapTerminalMetrics();
     try {{ fit.fit(); }} catch (error) {{}}
   }};
   window.mpcSetTheme = function (theme) {{
@@ -223,14 +315,35 @@ html, body {{ width: 100%; height: 100%; overflow: hidden; background: #111827; 
       var isMac = /Mac|iPhone|iPad/.test(navigator.platform);
       var modifier = event.ctrlKey || event.metaKey;
       var key = event.key;
+      var ctrl = event.ctrlKey;
+      var meta = event.metaKey;
+      var shift = event.shiftKey;
 
-      if (modifier && key === 'Insert') {{
-        var selection = term.getSelection();
-        if (selection) {{ bridge.copy_text(selection); event.preventDefault(); return false; }}
-        return true;
-      }}
-      if (event.shiftKey && key === 'Insert') {{
+      // A focused QWebEngineView swallows keys before the host app's Qt
+      // shortcuts run, so clipboard chords must be handled here.
+      var copyChord =
+        (isMac && meta && (key === 'c' || key === 'C')) ||
+        (ctrl && shift && (key === 'c' || key === 'C')) ||
+        (ctrl && key === 'Insert');
+      var pasteChord =
+        (isMac && meta && (key === 'v' || key === 'V')) ||
+        (ctrl && (key === 'v' || key === 'V')) ||
+        (shift && key === 'Insert');
+
+      if (pasteChord) {{
         bridge.request_paste();
+        event.preventDefault();
+        return false;
+      }}
+      if (copyChord) {{
+        var chordSelection = term.getSelection();
+        if (chordSelection) bridge.copy_text(chordSelection);
+        event.preventDefault();
+        return false;
+      }}
+      if (ctrl && !shift && (key === 'c' || key === 'C') && term.hasSelection()) {{
+        // Ctrl+C copies when text is selected, otherwise interrupts.
+        bridge.copy_text(term.getSelection());
         event.preventDefault();
         return false;
       }}
@@ -240,42 +353,19 @@ html, body {{ width: 100%; height: 100%; overflow: hidden; background: #111827; 
         return false;
       }}
       if (modifier && (key === '=' || key === '+' || key === '-' || key === '_' || key === '0')) {{
-        var current = term.options.fontSize || 13;
-        if (key === '0') window.mpcSetFontSize(13);
-        else if (key === '-' || key === '_') window.mpcSetFontSize(current - 1);
-        else window.mpcSetFontSize(current + 1);
+        if (key === '0') window.mpcSetFontSize(defaultFontSize);
+        else if (key === '-' || key === '_') window.mpcSetFontSize(logicalFontSize - 1);
+        else window.mpcSetFontSize(logicalFontSize + 1);
         event.preventDefault();
         return false;
       }}
       return true;
     }});
 
-    var linkProvider = {{
-      provideLinks: function (bufferLineNumber, callback) {{
-        var line = term.buffer.active.getLine(bufferLineNumber - 1);
-        if (!line) {{ callback(undefined); return; }}
-        var text = line.translateToString(true);
-        var pattern = /(?:https?:\\/\\/|file:\\/\\/)[^\\s'"<>()\\[\\]]+/g;
-        var links = [];
-        var match;
-        while ((match = pattern.exec(text)) !== null) {{
-          (function (value, start) {{
-            links.push({{
-              range: {{
-                start: {{x: start + 1, y: bufferLineNumber}},
-                end: {{x: start + value.length, y: bufferLineNumber}}
-              }},
-              text: value,
-              activate: function (_event, uri) {{ bridge.open_link(uri); }}
-            }});
-          }})(match[0], match.index);
-        }}
-        callback(links.length ? links : undefined);
-      }}
-    }};
-    term.registerLinkProvider(linkProvider);
-
     function fitTerminal() {{
+      if ((window.devicePixelRatio || 1) !== lastDevicePixelRatio) {{
+        snapTerminalMetrics();
+      }}
       var dimensions = fit.proposeDimensions();
       if (!dimensions || dimensions.cols <= 0 || dimensions.rows <= 0) return;
       fit.fit();
@@ -319,6 +409,7 @@ class DeepTerminalBridge(QObject):
     bell = Signal()
     font_size_changed = Signal(int)
     search_requested = Signal()
+    search_results_received = Signal(int, int)
     ready = Signal()
 
     @Slot(str)
@@ -354,6 +445,10 @@ class DeepTerminalBridge(QObject):
     def request_search(self) -> None:
         self.search_requested.emit()
 
+    @Slot(int, int)
+    def search_results(self, count: int, index: int) -> None:
+        self.search_results_received.emit(count, index)
+
     @Slot()
     def notify_bell(self) -> None:
         self.bell.emit()
@@ -385,6 +480,9 @@ class DeepTerminalSurface(QFrame):
         *,
         web_view_factory=None,
         flush_interval_ms: int = _FLUSH_INTERVAL_MS,
+        gpu_renderer: bool = False,
+        font_family: str = "",
+        font_size: int = _DEFAULT_FONT_SIZE,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("deepTerminalSurface")
@@ -403,7 +501,10 @@ class DeepTerminalSurface(QFrame):
         self._tracker = InputDraftTracker()
         self._last_paste_at = 0.0
         self._last_paste_text = ""
-        self._font_size = 13
+        self._font_family = font_family.strip()
+        self._default_font_size = _clamp_font_size(font_size)
+        self._font_size = self._default_font_size
+        self._page_dpr: float | None = None
 
         self._bridge = DeepTerminalBridge(self)
         self._bridge.input_received.connect(self._handle_input)
@@ -415,6 +516,7 @@ class DeepTerminalSurface(QFrame):
         self._bridge.bell.connect(self.bell_received.emit)
         self._bridge.font_size_changed.connect(self._handle_font_size)
         self._bridge.search_requested.connect(self.search_requested.emit)
+        self._bridge.search_results_received.connect(self.search_result.emit)
         self._bridge.ready.connect(self._handle_ready)
 
         self._flush_timer = QTimer(self)
@@ -432,7 +534,13 @@ class DeepTerminalSurface(QFrame):
             self._view = view_class(self)
             self._view.setObjectName("deepTerminalWebView")
             self._view.page().setWebChannel(self._channel)
-            self._view.setHtml(build_deep_terminal_html())
+            self._view.setHtml(
+                build_deep_terminal_html(
+                    gpu_renderer,
+                    self._font_family,
+                    self._default_font_size,
+                )
+            )
         self.setFocusProxy(self._view)
 
         layout = QVBoxLayout(self)
@@ -547,51 +655,64 @@ class DeepTerminalSurface(QFrame):
     def search(self, query: str, *, direction: int = 1, case_sensitive: bool = False) -> None:
         if not self._page_ready:
             return
-        script = "window.mpcSearch ? window.mpcSearch({query}, {direction}, {case}) : '{{}}'".format(
+        script = "window.mpcSearch ? window.mpcSearch({query}, {direction}, {case}) : undefined".format(
             query=_json_literal(query),
             direction=int(direction),
             case="true" if case_sensitive else "false",
         )
-        self._run_js(script, self._handle_search_result)
+        self._run_js(script)
 
     def clear_search(self) -> None:
         if self._page_ready:
             self._run_js("window.mpcClearSearch && window.mpcClearSearch();")
 
     def set_font_size(self, size: int) -> None:
-        size = max(6, min(40, int(size)))
+        size = _clamp_font_size(size)
         self._font_size = size
         if self._page_ready:
             self._run_js(f"window.mpcSetFontSize && window.mpcSetFontSize({size});")
 
+    def reset_font_size(self) -> None:
+        self.set_font_size(self._default_font_size)
+
     def font_size(self) -> int:
         return self._font_size
+
+    def font_family(self) -> str:
+        return self._font_family
+
+    def page_device_pixel_ratio(self) -> float | None:
+        return self._page_dpr
+
+    def save_snapshot(self, path) -> bool:
+        pixmap = self.grab()
+        if pixmap.isNull() or pixmap.width() <= 0:
+            return False
+        return pixmap.save(str(path))
 
     def apply_theme(self, theme: dict[str, str]) -> None:
         if self._page_ready:
             self._bridge.theme_requested.emit(_json_literal(theme))
 
     def set_font_family(self, family: str) -> None:
+        self._font_family = family.strip()
+        resolved = self._font_family or _DEFAULT_FONT_FAMILY
         if self._page_ready:
-            self._bridge.font_family_requested.emit(family)
+            self._bridge.font_family_requested.emit(resolved)
 
     def toPlainText(self) -> str:  # noqa: N802 - Qt-compatible API
         return "".join(self._plain_chunks)
 
     def _handle_input(self, data: bytes) -> None:
+        # The session must see the bytes before the submit event is published,
+        # so history gating can rely on the session's prompt/draft state.
+        self._send_bytes(data)
         for command in self._tracker.feed(data):
             self.command_submitted.emit(command)
-        self._send_bytes(data)
 
     def _handle_copy(self, text) -> None:
         if isinstance(text, str) and text:
             QApplication.clipboard().setText(text)
-
-    def _handle_search_result(self, result) -> None:
-        parsed = _parse_search_result(result)
-        if parsed is not None:
-            count, index = parsed
-            self.search_result.emit(count, index)
 
     def _handle_resize(self, cols: int, rows: int) -> None:
         self.terminal_resized.emit(cols, rows)
@@ -608,6 +729,14 @@ class DeepTerminalSurface(QFrame):
         self._replay_bytes = 0
         self._flush_output()
         self.set_font_size(self._font_size)
+        self._run_js(
+            "window.devicePixelRatio || 1",
+            self._handle_page_dpr,
+        )
+
+    def _handle_page_dpr(self, value) -> None:
+        if isinstance(value, (int, float)) and value > 0:
+            self._page_dpr = float(value)
 
     def _paste_clipboard(self) -> None:
         self.paste_from_clipboard()
@@ -663,25 +792,18 @@ def _json_literal(value) -> str:
     return json.dumps(value)
 
 
-def _parse_search_result(result) -> tuple[int, int] | None:
-    import json
-
-    if not isinstance(result, str):
-        return None
-    try:
-        payload = json.loads(result)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    count = payload.get("count")
-    index = payload.get("index")
-    if isinstance(count, int) and isinstance(index, int):
-        return count, index
-    return None
-
-
-def create_deep_surface(parent: QWidget | None = None) -> DeepTerminalSurface:
+def create_deep_surface(
+    parent: QWidget | None = None,
+    *,
+    gpu_renderer: bool = False,
+    font_family: str = "",
+    font_size: int = _DEFAULT_FONT_SIZE,
+) -> DeepTerminalSurface:
     if not WEB_TERMINAL_AVAILABLE:
         raise RuntimeError("PySide6-WebEngine is required for the Deep terminal")
-    return DeepTerminalSurface(parent)
+    return DeepTerminalSurface(
+        parent,
+        gpu_renderer=gpu_renderer,
+        font_family=font_family,
+        font_size=font_size,
+    )

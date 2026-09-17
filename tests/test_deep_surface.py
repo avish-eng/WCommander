@@ -11,7 +11,6 @@ from multipane_commander.ui.deep_terminal import surface as surface_module
 from multipane_commander.ui.deep_terminal.surface import (
     DeepTerminalBridge,
     DeepTerminalSurface,
-    _parse_search_result,
     build_deep_terminal_html,
 )
 
@@ -45,7 +44,13 @@ def test_deep_terminal_html_has_modern_features_without_cdn() -> None:
 
     assert "new Terminal(" in html
     assert "FitAddon.FitAddon" in html
-    assert "registerLinkProvider" in html
+    assert "SearchAddon.SearchAddon" in html
+    assert "Unicode11Addon.Unicode11Addon" in html
+    assert "WebLinksAddon.WebLinksAddon" in html
+    assert "onDidChangeResults" in html
+    assert "linkHandler" in html
+    assert "allowProposedApi: true" in html
+    assert "windowsPty" in html
     assert "window.mpcSearch" in html
     assert "window.mpcSetFontSize" in html
     assert "request_paste" in html
@@ -54,12 +59,105 @@ def test_deep_terminal_html_has_modern_features_without_cdn() -> None:
     assert "qrc:///qtwebchannel/qwebchannel.js" in html
 
 
+def test_app_enables_grayscale_text_antialiasing(monkeypatch) -> None:
+    from multipane_commander.app import configure_webengine_flags
+
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--existing-flag")
+    configure_webengine_flags()
+
+    assert os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] == "--existing-flag --disable-lcd-text"
+
+    configure_webengine_flags()
+    assert os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] == "--existing-flag --disable-lcd-text"
+
+
+def test_app_forces_webengine_scale_to_the_screen_dpr(monkeypatch) -> None:
+    from multipane_commander.app import configure_webengine_scale
+
+    class FakeScreen:
+        def devicePixelRatio(self) -> float:
+            return 1.5
+
+    class FakeApp:
+        def screenAt(self, _point):
+            return FakeScreen()
+
+        def primaryScreen(self):
+            return FakeScreen()
+
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-lcd-text")
+    configure_webengine_scale(FakeApp())
+
+    flags = os.environ["QTWEBENGINE_CHROMIUM_FLAGS"]
+    assert "--force-device-scale-factor=1.5" in flags
+
+
+def test_app_respects_an_explicit_webengine_scale(monkeypatch) -> None:
+    from multipane_commander.app import configure_webengine_scale
+
+    monkeypatch.setenv(
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "--disable-lcd-text --force-device-scale-factor=2",
+    )
+    configure_webengine_scale(None)
+
+    assert os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] == (
+        "--disable-lcd-text --force-device-scale-factor=2"
+    )
+
+
+def test_deep_terminal_html_defaults_to_the_crisp_dom_renderer() -> None:
+    html = build_deep_terminal_html()
+
+    assert "WebglAddon" not in html
+
+
+def test_deep_terminal_html_can_enable_the_gpu_renderer() -> None:
+    html = build_deep_terminal_html(gpu_renderer=True)
+
+    assert "WebglAddon.WebglAddon" in html
+    assert "onContextLoss" in html
+
+
+def test_deep_terminal_default_font_prefers_consolas() -> None:
+    html = build_deep_terminal_html()
+
+    assert '"Consolas, Cascadia Mono' in html
+    assert "fontSize: 14" in html
+    assert "function snapTerminalMetrics()" in html
+    assert "function measureAdvance(" in html
+    assert "logicalFontSize" in html
+
+
+def test_deep_terminal_html_uses_configured_font() -> None:
+    html = build_deep_terminal_html(font_family="JetBrains Mono", font_size=15)
+
+    assert '"JetBrains Mono"' in html
+    assert "fontSize: 15" in html
+    assert "var defaultFontSize = 15" in html
+
+    default = build_deep_terminal_html()
+    assert "fontSize: 14" in default
+    assert "var defaultFontSize = 14" in default
+
+
+def test_deep_terminal_html_handles_clipboard_chords_inside_webengine() -> None:
+    html = build_deep_terminal_html()
+
+    assert "copyChord" in html
+    assert "pasteChord" in html
+    assert "term.hasSelection()" in html
+    assert "bridge.copy_text(term.getSelection())" in html
+    assert "bridge.request_paste()" in html
+    assert "isMac && meta" in html
+
+
 def test_deep_terminal_html_calls_bridge_slots_not_signals() -> None:
     html = build_deep_terminal_html()
 
     assert "bridge.request_search()" in html
     assert "bridge.notify_bell()" in html
-    assert "bridge.notify_font_size(size)" in html
+    assert "bridge.notify_font_size(logicalFontSize)" in html
     assert "bridge.search_requested()" not in html
     assert "bridge.bell()" not in html
     assert "bridge.font_size_changed(" not in html
@@ -261,13 +359,6 @@ def test_surface_search_is_a_noop_without_a_page() -> None:
     assert surface.search_result is not None
 
 
-def test_parse_search_result_handles_valid_and_invalid_payloads() -> None:
-    assert _parse_search_result('{"count": 3, "index": 1}') == (3, 1)
-    assert _parse_search_result("not json") is None
-    assert _parse_search_result('{"count": "x", "index": 1}') is None
-    assert _parse_search_result(None) is None
-
-
 def test_create_deep_surface_raises_without_webengine(monkeypatch) -> None:
     monkeypatch.setattr(surface_module, "WEB_TERMINAL_AVAILABLE", False)
     import pytest
@@ -290,9 +381,7 @@ class _FakePage:
         self.calls.append((script, callback))
         if callback is None:
             return
-        if "mpcSearch" in script:
-            callback('{"count": 2, "index": 0}')
-        elif "mpcGetSelection" in script:
+        if "mpcGetSelection" in script:
             callback("selected text")
         elif "mpcGetFontSize" in script:
             callback(16)
@@ -334,6 +423,8 @@ def test_surface_routes_javascript_features_to_the_page() -> None:
     assert any("mpcSelectAll" in script for script in scripts)
     assert any("mpcClearSearch" in script for script in scripts)
     assert any("mpcFocus" in script for script in scripts)
+
+    surface._bridge.search_results(2, 0)
     assert results == [(2, 0)]
 
 

@@ -39,7 +39,7 @@ def _offscreen_app(monkeypatch) -> QApplication:
     )
     monkeypatch.setattr(
         "multipane_commander.ui.terminal_dock.create_terminal_surface",
-        lambda parent=None: TerminalSurface(),
+        lambda parent=None, **_kwargs: TerminalSurface(),
     )
     return _APP
 

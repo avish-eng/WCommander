@@ -16,6 +16,19 @@ def test_prompt_heuristic_accepts_common_prompts() -> None:
     assert looks_like_prompt("➜  src ")
 
 
+def test_prompt_heuristic_accepts_fish_and_custom_gt_prompts() -> None:
+    assert looks_like_prompt("user@host ~> ")
+    assert looks_like_prompt("user@host ~>")
+    assert looks_like_prompt("(venv) ~/project > ")
+    assert looks_like_prompt("[user@host dir]>")
+
+
+def test_prompt_heuristic_rejects_output_that_merely_ends_in_gt() -> None:
+    assert not looks_like_prompt("--> ")
+    assert not looks_like_prompt("output =>")
+    assert not looks_like_prompt("a + b =>")
+
+
 def test_prompt_heuristic_rejects_continuations_and_repls() -> None:
     assert not looks_like_prompt("")
     assert not looks_like_prompt("   ")
@@ -52,6 +65,24 @@ def test_parser_tracks_windows_cwd_from_osc_7_and_9() -> None:
 
     parser.feed("\x1b]9;9;C:\\Users\\dev\\Other\x07")
     assert parser.cwd == "C:\\Users\\dev\\Other"
+
+
+def test_parser_derives_filesystem_cwd_from_windows_prompt() -> None:
+    parser = ShellIntegrationParser()
+
+    parser.feed("C:\\Users\\dev\\Project> ")
+
+    assert parser.at_prompt is True
+    assert parser.cwd == "C:\\Users\\dev\\Project"
+
+
+def test_parser_ignores_non_filesystem_powershell_drives() -> None:
+    parser = ShellIntegrationParser()
+
+    parser.feed("PS HKLM:\\> ")
+
+    assert parser.at_prompt is True
+    assert parser.cwd is None
 
 
 def test_parser_tracks_prompt_marks_and_exit_status() -> None:

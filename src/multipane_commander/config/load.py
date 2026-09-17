@@ -111,7 +111,13 @@ def load_config() -> AppConfig:
             bookmarked_commands=_string_list(terminal_payload.get("bookmarked_commands", [])),
             history_panel_visible=_safe_bool(terminal_payload.get("history_panel_visible"), False),
             experimental_pty=_safe_bool(terminal_payload.get("experimental_pty"), False),
-            prefer_pty=_safe_bool(terminal_payload.get("prefer_pty"), True),
+            prefer_pty=_safe_bool(
+                terminal_payload.get("prefer_pty"),
+                _safe_bool(terminal_payload.get("experimental_pty"), True),
+            ),
+            gpu_renderer=_safe_bool(terminal_payload.get("gpu_renderer"), False),
+            font_family=_terminal_font_family(terminal_payload.get("font_family")),
+            font_size=_terminal_font_size(terminal_payload.get("font_size")),
             engine=_terminal_engine(terminal_payload.get("engine")),
         ),
         ai=AiConfig(
@@ -151,6 +157,20 @@ def _terminal_engine(value: object) -> str:
         if normalized in {"deep", "classic"}:
             return normalized
     return "deep"
+
+
+def _terminal_font_size(value: object) -> int:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        size = int(value)
+        if 6 <= size <= 40:
+            return size
+        return 14
+
+
+def _terminal_font_family(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 def _string_list(value: object) -> list[str]:
@@ -197,6 +217,9 @@ def save_config(config: AppConfig) -> None:
             "history_panel_visible": config.terminal.history_panel_visible,
             "experimental_pty": config.terminal.experimental_pty,
             "prefer_pty": config.terminal.prefer_pty,
+            "gpu_renderer": config.terminal.gpu_renderer,
+            "font_family": config.terminal.font_family,
+            "font_size": config.terminal.font_size,
             "engine": config.terminal.engine,
         },
         "ai": {

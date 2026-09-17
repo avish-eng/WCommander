@@ -193,12 +193,18 @@ def test_deep_dock_inject_command_submits_cwd_and_command_together(tmp_path: Pat
     assert dock.recent_commands() == ["make test"]
 
 
-def test_deep_dock_records_confirmed_commands_not_raw_terminal_input(tmp_path: Path) -> None:
+def test_deep_dock_records_typed_commands_only_when_draft_started_at_prompt(tmp_path: Path) -> None:
     dock, sessions = _dock(tmp_path, visible=True)
+    sessions[0].draft_started_at_prompt = False
     dock.output.command_submitted.emit("password-entered-into-program")
     assert dock.recent_commands() == []
-    sessions[0].command_detected.emit("git status")
+
+    sessions[0].draft_started_at_prompt = True
+    dock.output.command_submitted.emit("git status")
     assert dock.recent_commands() == ["git status"]
+
+    sessions[0].command_detected.emit("make test")
+    assert dock.recent_commands() == ["make test", "git status"]
 
 
 def test_deep_dock_rejects_command_dispatch_while_shell_is_busy(tmp_path: Path) -> None:
@@ -281,6 +287,7 @@ def test_deep_dock_more_menu_exposes_modern_actions(tmp_path: Path) -> None:
 
     assert labels == [
         "Clear terminal",
+        "Save terminal image…",
         "Rerun last command",
         "Interrupt (Ctrl+C)",
         "Kill current process",
@@ -291,10 +298,46 @@ def test_deep_dock_more_menu_exposes_modern_actions(tmp_path: Path) -> None:
         "Increase font size",
         "Decrease font size",
         "Reset font size",
+        "Font family",
         "Use PTY on next launch",
         "Restart shell",
     ]
     assert dock.pty_action.isChecked()
+
+
+def test_deep_dock_font_controls_apply_and_report(tmp_path: Path) -> None:
+    dock, _sessions = _dock(tmp_path, visible=True)
+
+    assert [action.text() for action in dock.font_menu.actions()][0] == "Default (monospace chain)"
+
+    families: list[str] = []
+    dock.font_family_changed.connect(families.append)
+    dock.output.set_font_family = lambda family: None
+    dock._apply_font_family("Consolas")
+
+    assert families == ["Consolas"]
+    assert dock._font_family == "Consolas"
+
+    sizes: list[int] = []
+    dock.font_size_changed.connect(sizes.append)
+    dock._handle_font_size_changed(16)
+
+    assert sizes == [16]
+    assert dock._font_size == 16
+
+
+def test_deep_dock_saves_terminal_image_to_desktop(tmp_path: Path, monkeypatch) -> None:
+    dock, _sessions = _dock(tmp_path, visible=True)
+    monkeypatch.setattr(
+        "multipane_commander.ui.terminal_commands.QStandardPaths.writableLocation",
+        lambda _location: str(tmp_path),
+    )
+
+    dock._save_terminal_image()
+
+    target = tmp_path / "terminal-snapshot.png"
+    assert target.is_file()
+    assert "Saved" in dock.action_status_label.text()
 
 
 def test_deep_dock_interrupt_and_kill_delegate_to_session(tmp_path: Path) -> None:

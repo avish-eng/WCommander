@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from multipane_commander.ui.terminal_commands import TerminalCommands
+from multipane_commander.ui.terminal_commands import TerminalCommands, populate_font_menu
 import re
 
 from PySide6.QtCore import QEvent, QPoint, QTime, Qt, QTimer, Signal
@@ -25,10 +25,11 @@ from multipane_commander.ui.command_history import (
 from multipane_commander.ui.command_history import (
     CommandHistoryList as _CommandHistoryList,
 )
-from multipane_commander.ui.xterm_surface import WEB_TERMINAL_AVAILABLE, create_terminal_surface
-
-
-_MAX_HISTORY_ITEMS = 100
+from multipane_commander.ui.xterm_surface import (
+    WEB_TERMINAL_AVAILABLE,
+    XTERM_VERSION,
+    create_terminal_surface,
+)
 
 
 class TerminalDock(TerminalCommands, QFrame):
@@ -37,6 +38,8 @@ class TerminalDock(TerminalCommands, QFrame):
     commands_changed = Signal(object, object)
     history_panel_visibility_changed = Signal(bool)
     experimental_pty_toggled = Signal(bool)
+    font_size_changed = Signal(int)
+    font_family_changed = Signal(str)
 
     def __init__(
         self,
@@ -46,6 +49,9 @@ class TerminalDock(TerminalCommands, QFrame):
         follow_active_pane: bool,
         experimental_pty: bool = False,
         prefer_pty: bool | None = None,
+        gpu_renderer: bool = False,
+        font_family: str = "",
+        font_size: int = 14,
         recent_commands: list[str] | None = None,
         bookmarked_commands: list[str] | None = None,
         history_panel_visible: bool = False,
@@ -64,6 +70,10 @@ class TerminalDock(TerminalCommands, QFrame):
         self._experimental_pty = (
             experimental_pty or WEB_TERMINAL_AVAILABLE if prefer_pty is None else prefer_pty
         )
+        self._gpu_renderer = gpu_renderer
+        self._font_family = font_family.strip()
+        self._base_font_size = max(6, min(40, int(font_size)))
+        self._font_size = self._base_font_size
         self._recent_commands = self._unique_commands(recent_commands or [])
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])
         self._trim_recent_commands()
@@ -74,7 +84,11 @@ class TerminalDock(TerminalCommands, QFrame):
         self._pty_ready_timer.setInterval(150)
         self._pty_ready_timer.timeout.connect(self._release_pty_input)
         self.session = self._build_session(initial_directory)
-        self.output = create_terminal_surface()
+        self.output = create_terminal_surface(
+            gpu_renderer=self._gpu_renderer,
+            font_family=self._font_family,
+            font_size=self._base_font_size,
+        )
         self.output.terminal_resized.connect(self._resize_active_session)
         self.runtime_label = QLabel(self._runtime_description())
         self.follow_button = QPushButton()
@@ -113,12 +127,34 @@ class TerminalDock(TerminalCommands, QFrame):
         self.more_menu.setObjectName("contextMenu")
         self.clear_action = self.more_menu.addAction("Clear terminal")
         self.clear_action.triggered.connect(lambda _checked=False: self.output.clear())
+        self.save_image_action = self.more_menu.addAction("Save terminal image…")
+        self.save_image_action.triggered.connect(
+            lambda _checked=False: self._save_terminal_image()
+        )
         self.rerun_action = self.more_menu.addAction("Rerun last command")
         self.rerun_action.triggered.connect(lambda _checked=False: self._rerun_last_command())
         self.kill_action = self.more_menu.addAction("Kill current process")
         self.kill_action.setToolTip("Force stop the current process and restart the shell (Ctrl+Shift+K)")
         self.kill_action.triggered.connect(
             lambda _checked=False: self._force_kill_current_program()
+        )
+        self.more_menu.addSeparator()
+        self.font_increase_action = self.more_menu.addAction("Increase font size")
+        self.font_increase_action.triggered.connect(
+            lambda _checked=False: self._adjust_font_size(1)
+        )
+        self.font_decrease_action = self.more_menu.addAction("Decrease font size")
+        self.font_decrease_action.triggered.connect(
+            lambda _checked=False: self._adjust_font_size(-1)
+        )
+        self.font_reset_action = self.more_menu.addAction("Reset font size")
+        self.font_reset_action.triggered.connect(lambda _checked=False: self._reset_font_size())
+        self.font_menu = self.more_menu.addMenu("Font family")
+        populate_font_menu(
+            self,
+            self.font_menu,
+            current_family=self._font_family,
+            on_selected=self._apply_font_family,
         )
         self.more_menu.addSeparator()
         self.pty_action = self.more_menu.addAction("Use PTY on next launch")
@@ -301,8 +337,6 @@ class TerminalDock(TerminalCommands, QFrame):
         if emit:
             self.experimental_pty_toggled.emit(enabled)
 
-
-
     def copy_selected_text(self) -> None:
         self.output.copy()
 
@@ -338,7 +372,7 @@ class TerminalDock(TerminalCommands, QFrame):
 
     def _runtime_description(self) -> str:
         frontend = (
-            "xterm.js"
+            f"xterm.js {XTERM_VERSION}"
             if bool(getattr(self.output, "accepts_immediate_input", False))
             else "Qt text fallback"
         )
@@ -405,36 +439,6 @@ class TerminalDock(TerminalCommands, QFrame):
         self._action_status_timer.start()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-    def _pin_current_command(self) -> None:
-        command = self._selected_command()
-        if command is None:
-            return
-        self._pin_command(command)
-
-
-
-
-
-    def _focus_first_command_list(self) -> None:
-        if self.command_list.count() == 0:
-            return
-        self.command_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        self.command_list.setCurrentRow(0)
-
-
-
     def _build_session(self, initial_directory: Path) -> TerminalSession:
         return TerminalSession(initial_directory=initial_directory, experimental_pty=self._experimental_pty)
 
@@ -454,6 +458,43 @@ class TerminalDock(TerminalCommands, QFrame):
         self.session.started.connect(self._handle_started)
         self.session.command_detected.connect(self._remember_command)
         self.session.prompt_changed.connect(self._handle_prompt_changed)
+        self.output.command_submitted.connect(self._handle_typed_command)
+        font_size_signal = getattr(self.output, "font_size_changed", None)
+        if font_size_signal is not None:
+            font_size_signal.connect(self._handle_font_size_changed)
+
+    def _adjust_font_size(self, delta: int) -> None:
+        if not hasattr(self.output, "set_font_size"):
+            self._show_action_status("Font controls need the xterm renderer")
+            return
+        size = getattr(self.output, "font_size", None)
+        current = size() if callable(size) else self._base_font_size
+        self.output.set_font_size(current + delta)
+
+    def _reset_font_size(self) -> None:
+        if not hasattr(self.output, "set_font_size"):
+            self._show_action_status("Font controls need the xterm renderer")
+            return
+        self.output.set_font_size(self._base_font_size)
+
+    def _handle_font_size_changed(self, size: int) -> None:
+        self._font_size = max(6, min(40, int(size)))
+        self.font_size_changed.emit(self._font_size)
+
+    def _apply_font_family(self, family: str) -> None:
+        self._font_family = family.strip()
+        if hasattr(self.output, "set_font_family"):
+            self.output.set_font_family(self._font_family)
+        self._show_action_status(f"Font: {self._font_family or 'Default'}")
+        self.font_family_changed.emit(self._font_family)
+
+    def _handle_typed_command(self, command: str) -> None:
+        # Only draft text that started at an idle shell prompt is a command;
+        # input typed into a running child program (passwords, TUI keys) is
+        # never written to history.
+        if not self.session.draft_started_at_prompt:
+            return
+        self._remember_command(command)
 
     def _handle_prompt_changed(self, at_prompt: bool) -> None:
         if at_prompt and not self._prompt_was_ready:
@@ -467,6 +508,13 @@ class TerminalDock(TerminalCommands, QFrame):
         _backend_label, available, tooltip = self._backend_description()
         self.runtime_label.setText(self._runtime_description())
         self.runtime_label.setProperty("backendAvailable", available)
+        page_dpr = getattr(self.output, "page_device_pixel_ratio", None)
+        page_dpr = page_dpr() if callable(page_dpr) else None
+        if page_dpr:
+            tooltip = (
+                f"{tooltip}\nrender scale: page {page_dpr:.2f} / "
+                f"widget {self.output.devicePixelRatioF():.2f}"
+            )
         self.runtime_label.setToolTip(tooltip)
         self.runtime_label.style().unpolish(self.runtime_label)
         self.runtime_label.style().polish(self.runtime_label)

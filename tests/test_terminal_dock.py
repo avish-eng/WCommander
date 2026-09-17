@@ -143,7 +143,7 @@ def test_terminal_dock_shows_frontend_shell_and_backend_beside_title(
 
     dock._handle_started()
 
-    assert dock.runtime_label.text() == "xterm.js · PowerShell 7 · ConPTY"
+    assert dock.runtime_label.text() == "xterm.js 6.0.0 · PowerShell 7 · ConPTY"
     assert dock.findChild(QLabel, "terminalBackendStatus") is None
     assert "[terminal]" not in dock.output.toPlainText()
 
@@ -184,8 +184,13 @@ def test_terminal_dock_moves_secondary_actions_into_overflow(
         action.text() for action in dock.more_menu.actions() if not action.isSeparator()
     ] == [
         "Clear terminal",
+        "Save terminal image…",
         "Rerun last command",
         "Kill current process",
+        "Increase font size",
+        "Decrease font size",
+        "Reset font size",
+        "Font family",
         "Use PTY on next launch",
         "Restart shell",
     ]
@@ -357,15 +362,21 @@ def test_terminal_history_caps_at_one_hundred_rows_keeping_pinned_and_newest(
     assert rows[:4] == ["cls", "dir", "cmd 0", "brand new"]
 
 
-def test_terminal_dock_records_confirmed_commands_not_raw_program_input(monkeypatch, tmp_path):
+def test_terminal_dock_records_typed_commands_only_when_draft_started_at_prompt(monkeypatch, tmp_path):
     _qapp()
     session = FakeSession()
     monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: session)
     dock = TerminalDock(initial_directory=tmp_path, visible=True, follow_active_pane=True)
+    session.draft_started_at_prompt = False
     dock.output.command_submitted.emit("password-entered-into-program")
     assert dock.recent_commands() == []
-    session.command_detected.emit("git status")
+
+    session.draft_started_at_prompt = True
+    dock.output.command_submitted.emit("git status")
     assert dock.recent_commands() == ["git status"]
+
+    session.command_detected.emit("make test")
+    assert dock.recent_commands() == ["make test", "git status"]
 
 
 def test_terminal_dock_dispatch_uses_session_and_preserves_busy_program(monkeypatch, tmp_path):

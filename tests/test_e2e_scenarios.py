@@ -32,7 +32,6 @@ from multipane_commander.bootstrap import AppContext
 from multipane_commander.config.load import load_config
 from multipane_commander.config.model import AppConfig
 from multipane_commander.state.model import AppState, LayoutState, PaneState, TabState, WindowState
-from multipane_commander.ui.command_bar import CommandBar
 from multipane_commander.ui.main_window import MainWindow
 from multipane_commander.ui.terminal_dock import TerminalDock
 
@@ -126,16 +125,6 @@ def _has_path(pane, path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
-
-
-def test_e2e_main_window_does_not_show_command_bar(tmp_path: Path) -> None:
-    left, right = _setup_split(tmp_path)
-    window = _make_main_window(left, right)
-    try:
-        assert window.command_bar is None
-        assert window.findChildren(CommandBar) == []
-    finally:
-        _close_window(window)
 
 
 def test_e2e_terminal_toggle_persists_visibility(tmp_path: Path, monkeypatch) -> None:

@@ -27,6 +27,7 @@ class FakeDeepSession(QObject):
         self.known_directory = initial_directory
         self.backend = self
         self._running = False
+        self.draft_started_at_prompt = False
         self.starts = 0
         self.stops = 0
         self.restarts = 0

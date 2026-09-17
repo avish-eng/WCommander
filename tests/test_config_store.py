@@ -37,6 +37,9 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
             bookmarked_commands=["python run_app.py"],
             history_panel_visible=True,
             experimental_pty=True,
+            gpu_renderer=True,
+            font_family="Consolas",
+            font_size=15,
         ),
         env_path=EnvPathConfig(
             entries=["C:\\Tools", "C:\\Python"],
@@ -60,6 +63,10 @@ def test_config_store_persists_theme_selection_and_custom_themes(tmp_path, monke
     assert loaded.terminal.bookmarked_commands == ["python run_app.py"]
     assert loaded.terminal.history_panel_visible is True
     assert loaded.terminal.experimental_pty is True
+    assert loaded.terminal.prefer_pty is True
+    assert loaded.terminal.gpu_renderer is True
+    assert loaded.terminal.font_family == "Consolas"
+    assert loaded.terminal.font_size == 15
     assert loaded.env_path.entries == ["C:\\Tools", "C:\\Python"]
     assert loaded.env_path.sources == ["user", "machine"]
     assert loaded.env_path.original_entries == ["C:\\Tools", "%SystemRoot%\\Python"]
@@ -105,6 +112,7 @@ def test_config_store_handles_malformed_values(tmp_path, monkeypatch) -> None:
     assert loaded.theme.selected_theme_id == "windows-commander"
     assert loaded.theme.custom_themes == []
     assert loaded.terminal.experimental_pty is False
+    assert loaded.terminal.prefer_pty is False
     assert loaded.env_path.entries == ["C:\\Tools"]
     assert loaded.env_path.sources == ["session"]
     assert loaded.env_path.original_entries == [""]
@@ -131,3 +139,34 @@ def test_config_store_migrates_hidden_builtin_theme_ids(tmp_path, monkeypatch) -
     loaded = load_config()
 
     assert loaded.theme.deleted_builtin_theme_ids == ["solarized-dark"]
+
+
+def test_config_store_defaults_terminal_font_to_consolas_14(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    loaded = load_config()
+
+    assert loaded.terminal.font_family == ""
+    assert loaded.terminal.font_size == 14
+
+
+def test_config_store_prefers_explicit_prefer_pty_over_legacy_experimental_pty(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config_path = tmp_path / "MultiPaneCommander" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps({"terminal": {"experimental_pty": False, "prefer_pty": True}}),
+        encoding="utf-8",
+    )
+
+    assert load_config().terminal.prefer_pty is True
+
+    config_path.write_text(
+        json.dumps({"terminal": {"experimental_pty": True, "prefer_pty": False}}),
+        encoding="utf-8",
+    )
+
+    assert load_config().terminal.prefer_pty is False

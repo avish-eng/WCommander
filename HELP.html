@@ -197,18 +197,19 @@
         <tr class="wide"><td><kbd>Ctrl+Enter</kbd></td><td>Paste the current file name into the terminal</td></tr>
         <tr class="wide"><td><kbd>Alt+Enter</kbd></td><td>Paste the current item's full path into the terminal</td></tr>
         <tr class="wide"><td><kbd>Ctrl+Shift+K</kbd></td><td>Interrupt the current terminal program, escalating to stop if needed</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+F</kbd></td><td>Search terminal output (standard terminal)</td></tr>
+        <tr class="wide"><td><kbd>Ctrl+F</kbd></td><td>Search terminal output; all matches highlighted</td></tr>
         <tr class="wide"><td><kbd>Ctrl+=</kbd> / <kbd>Ctrl+-</kbd> / <kbd>Ctrl+0</kbd></td><td>Font zoom (standard terminal)</td></tr>
         <tr class="wide"><td><kbd>Ctrl+Insert</kbd> / <kbd>Shift+Insert</kbd></td><td>Copy / paste (standard terminal)</td></tr>
         <tr class="wide"><td><kbd>Ctrl+C</kbd></td><td>Copy when text is selected, otherwise send interrupt</td></tr>
         <tr class="wide"><td><kbd>Ctrl+V</kbd></td><td>Paste into the terminal</td></tr>
-        <tr class="wide"><td><kbd>Ctrl+G</kbd></td><td>Focus the command bar</td></tr>
       </table>
       <ul class="muted">
         <li>The terminal follows the active pane's directory by default. Directory changes wait for a detected prompt with no unfinished input. Switching to Independent cancels a pending directory change.</li>
         <li>The standard terminal also understands OSC 7 / OSC 9;9 / OSC 133 shell integration when your shell emits it, and skips redundant directory changes.</li>
+        <li>Text uses the crisp DOM renderer by default. <strong>Layout (F11) → Terminal compatibility → GPU renderer</strong> switches to WebGL on the next launch for maximum output throughput.</li>
+        <li>The <strong>⋯</strong> menu offers <strong>Font family</strong> (installed fixed-pitch families; default Consolas at 14px) and <strong>Increase / Decrease / Reset font size</strong>; font zoom is remembered across restarts.</li>
         <li>Right-click the terminal for Copy / Paste / Select all / Find / Clear / Interrupt / Kill / Restart.</li>
-        <li>Pinned commands appear at the top of the history list. Only commands launched through the app or reported by shell integration are saved; ordinary terminal input is not recorded. Running or loading a saved command requires an idle shell with an empty prompt.</li>
+        <li>Pinned commands appear at the top of the history list. Commands typed at an idle shell prompt are recorded; input typed into a running program (passwords, pager keys, etc.) is never saved. Running or loading a saved command requires an idle shell with an empty prompt.</li>
         <li>The terminal backend name, such as ConPTY, appears at the end of the status line.</li>
       </ul>
     </section>

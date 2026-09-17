@@ -5,7 +5,27 @@
 
 - Isolate the Windows build's DLL search path to prevent unrelated tool runtimes from supplying incompatible Qt dependencies.
 
-- Consolidate shell controls and Claude Code onto shared terminal rendering and process handling, with offline assets for Claude. Guard command dispatch and directory following, preserve rejected command-bar input, stop recording raw terminal input in command history, and apply terminal preferences on the next launch without replacing active sessions.
+- Match QtWebEngine's device scale factor to the monitor Qt composites on (`--force-device-scale-factor`). QtWebEngine could report a system-wide 120% while Qt used the per-monitor DPR (100%/150%), so the whole web view was resampled when composited — softening text and dropping single-pixel glyph features such as the top of `03:10`. The startup screen under the cursor decides the factor, an explicit user override is respected, and the terminal tooltip now reports `render scale: page X / widget Y` for diagnosis.
+
+- Add **⋯ → Save terminal image…** to capture the terminal at native pixels to `Desktop\terminal-snapshot.png` (useful for sharing exactly what the renderer produced instead of a rescaled screenshot).
+
+- Snap the terminal's glyph ppem, character advance, and cell height to whole device pixels whenever the display scale factor is fractional (Windows 120%/150%). Previously a 14px monospace grid advanced 16.8 device pixels, landing glyphs on shifting subpixel phases and producing uneven stems and visibly clipped digits (e.g. `03:10`). The logical font size (zoom/config) stays an integer.
+
+- Disable Chromium's LCD subpixel text antialiasing inside QtWebEngine (`--disable-lcd-text`) so terminal and web-preview glyphs use clean grayscale antialiasing; the previous subpixel rendering produced uneven stems and colour fringing at Windows fractional scaling (visible as a broken-looking `u`).
+
+- Make the terminal font configurable and persistent: a **Font family** picker listing installed fixed-pitch families (default is now **Consolas at 14px**, with Cascadia Mono and platform fallbacks) and Increase/Decrease/Reset font size in the dock's overflow menu, with `Ctrl`+zoom changes saved to config as `terminal.font_family` / `terminal.font_size`.
+
+- Default the terminal to xterm's DOM renderer for crisp text at fractional display scaling (e.g. Windows 120%/150%), and add **Layout (F11) → Terminal compatibility → GPU renderer (WebGL)** as a next-launch opt-in for very high output throughput.
+
+- Upgrade the bundled terminal renderer from xterm.js 5.3.0 to 6.0.0 and adopt the official addons: fit 0.11, unicode11, search 0.16 (highlighted matches, wrap-aware finding, result count through `onDidChangeResults`), web-links, and WebGL 0.19 with an automatic DOM fallback and context-loss recovery. Adds OSC 8 link handling through a safe handler, synchronized-output (DEC 2026) rendering, OSC 52 clipboard support, and tighter ConPTY resize behaviour.
+
+- Remove the unused command bar (module, layout, `Ctrl+G` shortcut, styles, docs) now that the embedded terminal covers command execution.
+
+- Consolidate shell controls and Claude Code onto shared terminal rendering and process handling, with offline assets for Claude. Guard command dispatch and directory following, record commands typed at an idle shell prompt while never saving input to running child programs, and apply terminal preferences on the next launch without replacing active sessions.
+- Restore typed-command history for both terminal modes, gated by a session flag that marks a draft as shell input only when it started at a detected prompt.
+- Migrate the legacy `experimental_pty` setting into `prefer_pty` when no explicit value exists, so an explicitly disabled PTY is not silently re-enabled.
+- Recognise fish and other `user@host …>` style prompts in the idle-prompt heuristic, and ignore non-filesystem PowerShell drives (`HKLM:` and friends) when deriving the working directory from Windows prompts.
+- Validate the target directory and current draft before starting a session for an explicit command dispatch.
 
 - Improve popup reliability: validate transfer destinations and rename previews, reset cancelled AI requests, make theme editing scrollable with changes applied only on Save, default destructive confirmations to Cancel, and keep successful background transfers out of the way.
 

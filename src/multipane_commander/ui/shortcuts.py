@@ -81,5 +81,4 @@ def bind_window_shortcuts(window):
     QShortcut(QKeySequence("Ctrl+K"), window, activated=window._open_ai_palette)
     QShortcut(QKeySequence("Ctrl+Shift+I"), window, activated=window._toggle_ai_pane)
     QShortcut(QKeySequence("Ctrl+Shift+C"), window, activated=window._toggle_ai_chat)
-    QShortcut(QKeySequence("Ctrl+G"), window, activated=window._focus_command_bar)
     QShortcut(QKeySequence("Ctrl+P"), window, activated=window._open_path_editor)

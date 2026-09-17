@@ -1,8 +1,31 @@
 """Shared command dispatch and history for both shell terminal views."""
 from pathlib import Path
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QPoint, QSize, QStandardPaths, Qt
+from PySide6.QtGui import QActionGroup, QFontDatabase
 from PySide6.QtWidgets import QListWidgetItem, QMenu
 from multipane_commander.ui.command_history import PINNED_COMMAND_ROLE, MAX_HISTORY_ITEMS, trim_history
+
+
+def populate_font_menu(owner, menu: QMenu, *, current_family: str, on_selected) -> None:
+    """Fill a menu with exclusive fixed-pitch font choices plus a Default entry."""
+    group = QActionGroup(owner)
+    group.setExclusive(True)
+    default_action = menu.addAction("Default (monospace chain)")
+    default_action.setCheckable(True)
+    default_action.setChecked(not current_family)
+    default_action.setActionGroup(group)
+    default_action.triggered.connect(lambda _checked=False: on_selected(""))
+    menu.addSeparator()
+    families = sorted(
+        {family for family in QFontDatabase.families() if QFontDatabase.isFixedPitch(family)},
+        key=str.casefold,
+    )
+    for family in families:
+        action = menu.addAction(family)
+        action.setCheckable(True)
+        action.setChecked(family == current_family)
+        action.setActionGroup(group)
+        action.triggered.connect(lambda _checked=False, name=family: on_selected(name))
 
 
 class TerminalCommands:
@@ -13,11 +36,15 @@ class TerminalCommands:
     def _dispatch_command(self, command: str, *, cwd: Path | None = None, run: bool = True) -> bool:
         if not command.strip():
             return False
-        self._ensure_session_started()
         if cwd is not None and not cwd.is_dir():
             self._show_action_status("Choose an existing local folder before running a command")
             return False
-        if self.output.current_draft() or not self.session.can_inject:
+        if self.output.current_draft():
+            self._show_action_status("Finish or cancel the current input and wait for the shell prompt")
+            self.focus_input()
+            return False
+        self._ensure_session_started()
+        if not self.session.can_inject:
             self._show_action_status("Finish or cancel the current input and wait for the shell prompt")
             self.focus_input()
             return False
@@ -33,6 +60,21 @@ class TerminalCommands:
 
     def recent_commands(self) -> list[str]:
         return list(self._recent_commands)
+
+    def _save_terminal_image(self) -> None:
+        save = getattr(self.output, "save_snapshot", None)
+        if not callable(save):
+            self._show_action_status("Terminal image needs the xterm renderer")
+            return
+        desktop = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DesktopLocation
+        )
+        base = Path(desktop) if desktop else Path.home()
+        target = base / "terminal-snapshot.png"
+        if save(target):
+            self._show_action_status(f"Saved {target}")
+        else:
+            self._show_action_status("Could not save terminal image")
 
     def bookmarked_commands(self) -> list[str]:
         return list(self._bookmarked_commands)

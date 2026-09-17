@@ -56,7 +56,6 @@ class DeepTerminalSession(QObject):
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._desired_directory = initial_directory
         self._known_directory = initial_directory
-        self._last_sent_directory = initial_directory
         self._sync_attempts = 0
         self._restart_pending = False
         self._last_prompt = False
@@ -64,6 +63,7 @@ class DeepTerminalSession(QObject):
         self._last_command: str | None = None
         self._last_title: str | None = None
         self._input_dirty = False
+        self._draft_started_at_prompt = False
         self._follow_pending = False
         self.backend.output_received.connect(self._read_output)
         self.backend.started.connect(self._handle_started)
@@ -98,6 +98,16 @@ class DeepTerminalSession(QObject):
     def can_inject(self) -> bool:
         return self.is_running() and self.at_prompt and not self._input_dirty
 
+    @property
+    def draft_started_at_prompt(self) -> bool:
+        """True when the current input began at a detected shell prompt.
+
+        Used to decide whether a submitted draft is a shell command (safe and
+        useful to remember) or input typed into a running child program such
+        as a password prompt (must never be recorded).
+        """
+        return self._draft_started_at_prompt
+
     def start(self) -> None:
         self._restart_pending = False
         self.parser.reset()
@@ -107,6 +117,7 @@ class DeepTerminalSession(QObject):
         self._last_command = None
         self._last_title = None
         self._input_dirty = False
+        self._draft_started_at_prompt = False
         self.backend.initial_directory = self._desired_directory
         self.backend.start()
 
@@ -133,6 +144,8 @@ class DeepTerminalSession(QObject):
             return
         # Cursor/history navigation can introduce text we cannot reconstruct.
         # Treat any input as a draft until the user submits/cancels it.
+        if not self._input_dirty:
+            self._draft_started_at_prompt = self.at_prompt and not self.parser.command_running
         self._input_dirty = True
         self.parser.note_input(data)
         if b"\r" in data or b"\n" in data or b"\x03" in data:
@@ -211,15 +224,19 @@ class DeepTerminalSession(QObject):
         self.backend.terminate_process_tree()
 
     def _maybe_sync_directory(self) -> None:
-        if not self._follow_pending or not self.can_inject:
+        if not self._follow_pending:
             return
         desired = self._desired_directory
         if desired == self._known_directory:
+            # Already where the pane is; a follow request that needs no `cd`
+            # must not stay armed, or a manual `cd` later would be undone.
+            self._follow_pending = False
+            return
+        if not self.can_inject:
             return
         if self._sync_attempts >= _MAX_SYNC_ATTEMPTS:
             return
         command = build_cd_command(desired, self.shell_kind)
-        self._last_sent_directory = desired
         self._known_directory = desired
         self._sync_attempts += 1
         self._follow_pending = False
@@ -271,7 +288,6 @@ class DeepTerminalSession(QObject):
             return None
 
     def _handle_started(self) -> None:
-        self._last_sent_directory = self._desired_directory
         self._known_directory = self._desired_directory
         self.started.emit()
 

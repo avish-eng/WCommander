@@ -18,7 +18,7 @@ def terminal(request, tmp_path, monkeypatch):
     backend = FakeBackend()
     session = DeepTerminalSession(initial_directory=tmp_path, backend=backend)
 
-    def surface(parent=None):
+    def surface(parent=None, **_kwargs):
         return DeepTerminalSurface(parent, web_view_factory=lambda p: QWidget(p))
 
     if request.param == "standard":
@@ -52,7 +52,8 @@ def test_pager_quit_key_does_not_block_next_shell_command(terminal):
     backend.writes.clear()
     assert dock._dispatch_command("echo ready")
     assert "echo ready" in "".join(backend.writes)
-    assert dock.recent_commands() == ["echo ready"]
+    assert dock.recent_commands()[0] == "echo ready"
+    assert "q" not in dock.recent_commands()
 
 
 def test_pending_shell_draft_survives_repeated_ready_notification(terminal):

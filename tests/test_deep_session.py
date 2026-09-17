@@ -162,6 +162,38 @@ def test_session_injects_directory_once_at_prompt(tmp_path: Path) -> None:
     assert session.known_directory == target
 
 
+def test_session_does_not_pull_back_after_manual_directory_change(tmp_path: Path) -> None:
+    _qapp()
+    session, backend = _session(tmp_path)
+    backend.output_received.emit(b"user@host$ ")
+
+    session.change_directory(tmp_path)
+    assert backend.writes == []
+
+    manual = tmp_path / "manual"
+    backend.output_received.emit(b"\x1b]7;" + manual.as_uri().encode() + b"\x07")
+
+    assert session.known_directory == manual
+    assert backend.writes == []
+
+
+def test_session_follow_still_applies_after_a_real_pane_navigation(tmp_path: Path) -> None:
+    _qapp()
+    session, backend = _session(tmp_path)
+    backend.output_received.emit(b"user@host$ ")
+    session.change_directory(tmp_path)
+
+    manual = tmp_path / "manual"
+    backend.output_received.emit(b"\x1b]7;" + manual.as_uri().encode() + b"\x07")
+    backend.writes.clear()
+
+    target = tmp_path / "target"
+    session.change_directory(target)
+
+    assert any(str(target) in write and "cd " in write for write in backend.writes)
+    assert session.known_directory == target
+
+
 def test_session_waits_for_prompt_before_injecting(tmp_path: Path) -> None:
     _qapp()
     session, backend = _session(tmp_path)
@@ -290,6 +322,33 @@ def test_session_decodes_utf8_split_across_chunks(tmp_path: Path) -> None:
     backend.output_received.emit(encoded[3:])
 
     assert "café" in session.parser.visible_text()
+
+
+def test_session_flags_draft_started_at_prompt(tmp_path: Path) -> None:
+    _qapp()
+    session, backend = _session(tmp_path)
+    backend.output_received.emit(b"user@host$ ")
+
+    session.write_bytes(b"l")
+    session.write_bytes(b"s")
+
+    assert session.draft_started_at_prompt is True
+
+    session.write_bytes(b"\r")
+    session.write_bytes(b"s")
+
+    assert session.draft_started_at_prompt is False
+
+
+def test_session_does_not_flag_terminal_replies_as_drafts(tmp_path: Path) -> None:
+    _qapp()
+    session, backend = _session(tmp_path)
+    backend.output_received.emit(b"user@host$ ")
+
+    session.write_bytes(b"\x1b[1;1R")
+
+    assert session.draft_started_at_prompt is False
+    assert session.can_inject is True
 
 
 def test_session_forwards_backend_failure(tmp_path: Path) -> None:

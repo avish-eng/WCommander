@@ -36,6 +36,9 @@ class TerminalConfig:
     history_panel_visible: bool = False
     experimental_pty: bool = False
     prefer_pty: bool = True
+    gpu_renderer: bool = False
+    font_family: str = ""
+    font_size: int = 14
     engine: str = "deep"
 
 

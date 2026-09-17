@@ -16,7 +16,7 @@ def terminal(request, tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     backend = FakeBackend()
     session = DeepTerminalSession(initial_directory=tmp_path, backend=backend)
-    def surface(parent=None):
+    def surface(parent=None, **_kwargs):
         return DeepTerminalSurface(parent, web_view_factory=lambda p: QWidget(p))
     if request.param == "standard":
         dock = DeepTerminalDock(initial_directory=tmp_path, visible=False,
@@ -41,8 +41,21 @@ def test_child_program_input_is_never_saved_as_command_history(terminal):
     backend.output_received.emit(b"Password: ")
     dock.output._handle_input(b"SYNTHETIC_TEST_SECRET\r")
     assert not session.at_prompt
-    assert not dock.recent_commands()
-    assert not saved
+    # The shell command that launched the program is recorded; the secret
+    # typed into the child program is not.
+    assert dock.recent_commands() == ["program-requesting-password"]
+    assert len(saved) == 1
+
+
+def test_typed_command_at_idle_prompt_is_saved(terminal):
+    dock, session, backend = terminal
+    dock.output._handle_input(b"git status\r")
+    backend.output_received.emit(b"\r\nuser@host$ ")
+    assert dock.recent_commands() == ["git status"]
+
+    dock.output._handle_input(b"ls -la\r")
+    backend.output_received.emit(b"\r\nuser@host$ ")
+    assert dock.recent_commands() == ["ls -la", "git status"]
 
 
 def test_explicit_command_is_saved_and_cwd_is_part_of_guarded_command(terminal, tmp_path):
@@ -66,7 +79,7 @@ def test_ui_run_and_use_commands_do_not_write_into_busy_or_unfinished_input(term
     dock._use_command("echo unintended")
     assert not backend.writes
     assert "wait for the shell prompt" in dock.action_status_label.text()
-    assert not dock.recent_commands()
+    assert "echo unintended" not in dock.recent_commands()
 
 
 def test_folder_follow_waits_for_unfinished_command_to_finish(terminal, tmp_path):

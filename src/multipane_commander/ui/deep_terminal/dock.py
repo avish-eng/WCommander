@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from multipane_commander.ui.terminal_commands import TerminalCommands
+from multipane_commander.ui.terminal_commands import TerminalCommands, populate_font_menu
 import time
 
 from PySide6.QtCore import QEvent, QPoint, QTime, QTimer, QUrl, Qt, Signal
@@ -27,6 +27,7 @@ from multipane_commander.ui.command_history import (
 )
 from multipane_commander.ui.deep_terminal.surface import (
     WEB_TERMINAL_AVAILABLE,
+    XTERM_VERSION,
     DeepTerminalSurface,
     create_deep_surface,
 )
@@ -61,6 +62,8 @@ class DeepTerminalDock(TerminalCommands, QFrame):
     commands_changed = Signal(object, object)
     history_panel_visibility_changed = Signal(bool)
     experimental_pty_toggled = Signal(bool)
+    font_size_changed = Signal(int)
+    font_family_changed = Signal(str)
 
     def __init__(
         self,
@@ -70,6 +73,9 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         follow_active_pane: bool,
         experimental_pty: bool = False,
         prefer_pty: bool = True,
+        gpu_renderer: bool = False,
+        font_family: str = "",
+        font_size: int = 14,
         recent_commands: list[str] | None = None,
         bookmarked_commands: list[str] | None = None,
         history_panel_visible: bool = False,
@@ -87,6 +93,10 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         self._follow_active_pane = follow_active_pane
         self._current_directory = initial_directory
         self._prefer_pty = prefer_pty
+        self._gpu_renderer = gpu_renderer
+        self._font_family = font_family.strip()
+        self._base_font_size = max(6, min(40, int(font_size)))
+        self._font_size = self._base_font_size
         self._auto_restart = auto_restart
         self._terminated = False
         self._closing = False
@@ -97,7 +107,7 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])
         self._trim_recent_commands()
         self._session_factory = session_factory
-        self._surface_factory = surface_factory or create_deep_surface
+        self._surface_factory = surface_factory
 
         self.session = self._build_session(initial_directory)
         self.output = self._build_surface()
@@ -255,6 +265,10 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         menu.setObjectName("contextMenu")
         self.clear_action = menu.addAction("Clear terminal")
         self.clear_action.triggered.connect(lambda _checked=False: self.clear_terminal())
+        self.save_image_action = menu.addAction("Save terminal image…")
+        self.save_image_action.triggered.connect(
+            lambda _checked=False: self._save_terminal_image()
+        )
         self.rerun_action = menu.addAction("Rerun last command")
         self.rerun_action.triggered.connect(lambda _checked=False: self._rerun_last_command())
         self.interrupt_action = menu.addAction("Interrupt (Ctrl+C)")
@@ -281,7 +295,14 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         )
         self.font_reset_action = menu.addAction("Reset font size")
         self.font_reset_action.triggered.connect(
-            lambda _checked=False: self.output.set_font_size(13)
+            lambda _checked=False: self._reset_font_size()
+        )
+        self.font_menu = menu.addMenu("Font family")
+        populate_font_menu(
+            self,
+            self.font_menu,
+            current_family=self._font_family,
+            on_selected=self._apply_font_family,
         )
         menu.addSeparator()
         self.pty_action = menu.addAction("Use PTY on next launch")
@@ -409,7 +430,6 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         self.output.clear()
 
 
-
     def copy_selected_text(self) -> None:
         self.output.copy()
 
@@ -439,7 +459,15 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         )
 
     def _build_surface(self) -> DeepTerminalSurface:
-        return self._surface_factory(self)
+        factory = self._surface_factory
+        if factory is not None:
+            return factory(self)
+        return create_deep_surface(
+            self,
+            gpu_renderer=self._gpu_renderer,
+            font_family=self._font_family,
+            font_size=self._base_font_size,
+        )
 
     def _bind_session(self) -> None:
         self._prompt_was_ready = self.session.at_prompt
@@ -457,7 +485,9 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         self.session.command_detected.connect(self._handle_command_detected)
 
     def _bind_surface(self) -> None:
+        self.output.command_submitted.connect(self._handle_typed_command)
         self.output.terminal_resized.connect(self._resize_active_session)
+        self.output.font_size_changed.connect(self._handle_font_size_changed)
         self.output.link_activated.connect(self._open_link)
         self.output.search_requested.connect(lambda: self._toggle_search(True))
         self.output.search_result.connect(self._handle_search_result)
@@ -548,6 +578,14 @@ class DeepTerminalDock(TerminalCommands, QFrame):
             return
         self._remember_command(command)
 
+    def _handle_typed_command(self, command: str) -> None:
+        # Only draft text that started at an idle shell prompt is a command;
+        # input typed into a running child program (passwords, TUI keys) is
+        # never written to history.
+        if not self.session.draft_started_at_prompt:
+            return
+        self._remember_command(command)
+
     def _append_notice(self, text: str) -> None:
         self.output.append_output(text)
 
@@ -602,8 +640,21 @@ class DeepTerminalDock(TerminalCommands, QFrame):
 
     def _adjust_font_size(self, delta: int) -> None:
         size = getattr(self.output, "font_size", None)
-        current = size() if callable(size) else 13
+        current = size() if callable(size) else self._base_font_size
         self.output.set_font_size(current + delta)
+
+    def _reset_font_size(self) -> None:
+        self.output.set_font_size(self._base_font_size)
+
+    def _handle_font_size_changed(self, size: int) -> None:
+        self._font_size = max(6, min(40, int(size)))
+        self.font_size_changed.emit(self._font_size)
+
+    def _apply_font_family(self, family: str) -> None:
+        self._font_family = family.strip()
+        self.output.set_font_family(self._font_family)
+        self._show_action_status(f"Font: {self._font_family or 'Default'}")
+        self.font_family_changed.emit(self._font_family)
 
     def _toggle_follow_active_pane(self, enabled: bool) -> None:
         self.set_follow_active_pane(enabled)
@@ -639,7 +690,7 @@ class DeepTerminalDock(TerminalCommands, QFrame):
     def _refresh_backend_ui(self, *, at_prompt: bool | None = None) -> None:
         label, available, tooltip = self._backend_description()
         shell = _SHELL_LABELS.get(self.session.shell_kind, self.session.shell_kind)
-        frontend = "xterm.js" if WEB_TERMINAL_AVAILABLE else "Qt fallback"
+        frontend = f"xterm.js {XTERM_VERSION}" if WEB_TERMINAL_AVAILABLE else "Qt fallback"
         state = self._prompt_state(at_prompt)
         self.runtime_label.setText(f"{frontend} · {shell} · {label} · {state}")
         self.runtime_label.setProperty("backendAvailable", available)
@@ -647,6 +698,13 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         full_tooltip = tooltip
         if self.session.known_directory:
             full_tooltip = f"{tooltip}\n{self.session.known_directory}"
+        page_dpr = getattr(self.output, "page_device_pixel_ratio", None)
+        page_dpr = page_dpr() if callable(page_dpr) else None
+        if page_dpr:
+            full_tooltip = (
+                f"{full_tooltip}\nrender scale: page {page_dpr:.2f} / "
+                f"widget {self.output.devicePixelRatioF():.2f}"
+            )
         self.runtime_label.setToolTip(full_tooltip)
         self.runtime_label.style().unpolish(self.runtime_label)
         self.runtime_label.style().polish(self.runtime_label)
@@ -672,13 +730,6 @@ class DeepTerminalDock(TerminalCommands, QFrame):
 
     def _resize_active_session(self, cols: int, rows: int) -> None:
         self.session.resize(cols, rows)
-
-
-
-
-
-
-
 
 
     def _show_terminal_context_menu(self, position: QPoint) -> None:
