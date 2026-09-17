@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -69,3 +70,15 @@ class FileJobSnapshot:
         if self.total_actions <= 0:
             return 0
         return int((self.processed_actions / self.total_actions) * 100)
+
+
+@dataclass(slots=True)
+class JobLogEntry:
+    id: str = field(default_factory=lambda: uuid4().hex[:8])
+    timestamp: datetime = field(default_factory=datetime.now)
+    operation: str = ""
+    title: str = ""
+    status: str = "completed"
+    completed_actions: int = 0
+    total_actions: int = 0
+    errors: list[str] = field(default_factory=list)

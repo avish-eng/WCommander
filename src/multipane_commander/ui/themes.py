@@ -470,6 +470,7 @@ QMainWindow, QWidget, QDialog, QMessageBox {{
 QFrame#pane,
 QFrame#terminalDock,
 QFrame#jobsView,
+QFrame#logView,
 QFrame#quickView,
 QFrame#functionKeyBar,
 QFrame#dialogCard {{
@@ -536,6 +537,7 @@ QLabel#terminalPath,
 QLabel#terminalRuntime,
 QLabel#paneMeta,
 QLabel#jobsEmpty,
+QLabel#logEmpty,
 QLabel#quickViewMeta,
 QLabel#quickViewEmpty {{
     color: {palette.text_muted};
@@ -548,6 +550,7 @@ QLabel#terminalRuntime[backendAvailable="false"] {{
     color: {palette.bookmark_active_text};
 }}
 QLabel#jobsTitle,
+QLabel#logTitle,
 QLabel#quickViewTitle {{
     color: {palette.title_text};
     font-size: 16px;
@@ -624,6 +627,43 @@ QLabel#terminalActionStatus {{
     color: {palette.clipboard_cut_text};
     font-size: {max(8, font_size - 1)}pt;
     font-weight: 600;
+}}
+QPushButton#logButton {{
+    background: {palette.chip_muted_bg};
+    border: 1px solid {palette.chip_muted_border};
+    border-radius: 999px;
+    color: {palette.chip_muted_text};
+    padding: 4px 12px;
+    font-size: {max(8, font_size - 1)}pt;
+    font-weight: 600;
+}}
+QPushButton#logButton:hover {{
+    background: {palette.button_hover_bg};
+    border-color: {palette.button_hover_border};
+    color: {palette.text_primary};
+}}
+QPushButton#logButton[hasErrors="true"] {{
+    background: {palette.clipboard_cut_bg};
+    border-color: {palette.clipboard_cut_border};
+    color: {palette.clipboard_cut_text};
+}}
+QListWidget#logList {{
+    background: {palette.input_bg};
+    border: 1px solid {palette.input_border};
+    border-radius: 8px;
+    color: {palette.text_primary};
+    padding: 4px;
+}}
+QListWidget#logList::item {{
+    padding: 3px 6px;
+    border-radius: 5px;
+}}
+QListWidget#logList::item:hover {{
+    background: {palette.tree_hover_bg};
+}}
+QListWidget#logList::item:selected {{
+    background: {palette.tree_selected_bg};
+    color: {palette.selection_text};
 }}
 QFrame#functionKeyBar {{
     background: {_darken(palette.panel_bg, 0.16)};

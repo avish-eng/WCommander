@@ -95,7 +95,7 @@ class DeepTerminalDock(TerminalCommands, QFrame):
         self._prefer_pty = prefer_pty
         self._gpu_renderer = gpu_renderer
         self._font_family = font_family.strip()
-        self._base_font_size = max(6, min(40, int(font_size)))
+        self._base_font_size = max(6, min(40, int(font_size or 14)))
         self._font_size = self._base_font_size
         self._auto_restart = auto_restart
         self._terminated = False

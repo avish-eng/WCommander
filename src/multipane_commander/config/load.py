@@ -164,7 +164,7 @@ def _terminal_font_size(value: object) -> int:
         size = int(value)
         if 6 <= size <= 40:
             return size
-        return 14
+    return 14
 
 
 def _terminal_font_family(value: object) -> str:

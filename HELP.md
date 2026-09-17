@@ -257,10 +257,13 @@ Drag-and-drop is unambiguous: drop pane = destination. With multiple panes:
 
 ## 12. Background jobs — `F12`
 
-Copy / move / delete / extract operations run as **independent background jobs**. Each shows a modal progress window with files / bytes / throughput / ETA, plus **Pause**, **Cancel**, and **Move to background** buttons.
+Copy / move / delete / extract operations run as **independent background jobs**. Each shows a modeless progress window with files / bytes / throughput / ETA, plus **Cancel** and **Move To Background** buttons.
 
-- "Move to background" hides the modal but the job keeps running.
+- Clean finishes (success or cancel) close the progress window automatically — nothing to click.
+- If anything failed, the window stays open and lists the errors; the same details are also recorded in the Log.
+- "Move To Background" hides the window but the job keeps running.
 - `F12` opens the jobs view — a flyout listing every running/backgrounded job with progress, controls, and "bring to front".
+- **Log** (next to Folders / Thumbnails in the active pane's header) keeps the finished operations for the session: time, operation, status, counts, and error details on hover. The button shows how many results arrived since you last opened it, and turns red when one of them failed.
 - Per-physical-disk jobs are serialised; cross-disk jobs run in parallel.
 - On quit, running jobs prompt: *"N file operations are still running. Wait / Cancel all / Force quit?"*
 - Mixed results (some succeeded, some failed) are normal and shown explicitly — the UI never claims "done" for a partial result.

@@ -176,6 +176,7 @@ class PaneView(QFrame):
     preferences_changed = Signal()
     drag_drop_requested = Signal(object, object, int)
     open_in_other_pane_requested = Signal(object)
+    log_requested = Signal()
 
     def __init__(
         self,
@@ -230,6 +231,10 @@ class PaneView(QFrame):
         self.thumbnail_toggle = QPushButton("Thumbnails")
         self.thumbnail_size_picker = QComboBox()
         self.refresh_button = QPushButton("↻")
+        self.log_button = QPushButton("Log")
+        self.log_button.setObjectName("logButton")
+        self.log_button.setToolTip("Finished actions")
+        self.log_button.clicked.connect(self.log_requested.emit)
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_stack = QStackedWidget()
         self.browser_stack = QStackedWidget()
@@ -400,6 +405,7 @@ class PaneView(QFrame):
         header_row.addWidget(self.thumbnail_toggle)
         header_row.addWidget(self.thumbnail_size_picker)
         header_row.addWidget(self.refresh_button)
+        header_row.addWidget(self.log_button)
 
         status_row = QHBoxLayout()
         status_row.setContentsMargins(3, 0, 3, 0)
@@ -449,6 +455,13 @@ class PaneView(QFrame):
         self.style().polish(self)
         self._refresh_row_styles()
         self.update()
+
+    def set_log_button_state(self, text: str, has_errors: bool, *, visible: bool) -> None:
+        self.log_button.setText(text)
+        self.log_button.setProperty("hasErrors", has_errors)
+        self.log_button.setVisible(visible)
+        self.log_button.style().unpolish(self.log_button)
+        self.log_button.style().polish(self.log_button)
 
     def focus_list(self) -> None:
         if self.quick_view_enabled:

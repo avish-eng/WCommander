@@ -31,6 +31,7 @@ from multipane_commander.services.env_path import PathSnapshot, path_snapshot
 from multipane_commander.services.fs.local_fs import LocalFileSystem
 from multipane_commander.services.jobs.planning import plan_transfer
 from multipane_commander.services.jobs.manager import JobManager
+from multipane_commander.services.jobs.log import JobLog
 from multipane_commander.services.jobs.model import FileJobAction, FileJobResult
 from multipane_commander.services.undo import UndoRecord, UndoStack
 from multipane_commander.platform import root_paths, root_section_label, same_filesystem
@@ -38,6 +39,7 @@ from multipane_commander.ui.env_path_dialog import EnvPathDialog
 from multipane_commander.ui.function_key_bar import build_function_key_bar
 from multipane_commander.ui.shortcuts import bind_window_shortcuts
 from multipane_commander.ui.jobs_view import JobsView
+from multipane_commander.ui.log_view import LogView
 from multipane_commander.ui.pane_view import PaneView
 from multipane_commander.ui.deep_terminal.engine import (
     ENGINE_CLASSIC,
@@ -181,6 +183,10 @@ class MainWindow(QMainWindow):
         self._single_left_previous_maximized = False
         self.pane_views: list[PaneView] = []
         self.jobs_view = JobsView()
+        self.job_log = JobLog(self)
+        self.log_view = LogView()
+        self._unseen_log_entries = 0
+        self._unseen_log_errors = False
         self.terminal_dock = create_terminal_dock(
             engine=self.context.config.terminal.engine,
             initial_directory=self.context.state.panes[self.context.state.layout.active_pane_index].tabs[0].path,
@@ -246,6 +252,8 @@ class MainWindow(QMainWindow):
 
         self.jobs_view.setVisible(False)
         root_layout.addWidget(self.jobs_view)
+        self.log_view.setVisible(False)
+        root_layout.addWidget(self.log_view)
         self.function_bar = build_function_key_bar(
             actions=self._function_key_actions(),
             extra_widget=self._build_theme_controls(),
@@ -272,6 +280,7 @@ class MainWindow(QMainWindow):
             pane_view.operation_requested.connect(self._handle_operation_request)
             pane_view.preferences_changed.connect(lambda: persist_app_context(self.context))
             pane_view.drag_drop_requested.connect(self._handle_drag_drop_request)
+            pane_view.log_requested.connect(self._toggle_log_view)
             pane_view.open_in_other_pane_requested.connect(
                 lambda path, source_pane=pane_view: self._open_tab_in_other_pane(source_pane, path)
             )
@@ -356,8 +365,45 @@ class MainWindow(QMainWindow):
     def _bind_job_signals(self) -> None:
         self.job_manager.job_changed.connect(self.jobs_view.upsert_snapshot)
         self.job_manager.job_removed.connect(self.jobs_view.remove_snapshot)
+        self.job_manager.job_logged.connect(self.job_log.add_entry)
         self.jobs_view.cancel_requested.connect(self.job_manager.cancel_job)
+        self.log_view.clear_requested.connect(self._clear_job_log)
+        self.job_log.entry_added.connect(self._on_log_entry_added)
+        self._update_log_button()
         self._connect_terminal_signals(self.terminal_dock)
+
+    def _on_log_entry_added(self, entry) -> None:
+        self.log_view.add_entry(entry)
+        if not self.log_view.isVisible():
+            self._unseen_log_entries += 1
+            if entry.errors:
+                self._unseen_log_errors = True
+        self._update_log_button()
+
+    def _toggle_log_view(self) -> None:
+        visible = not self.log_view.isVisible()
+        self.log_view.setVisible(visible)
+        if visible:
+            self._unseen_log_entries = 0
+            self._unseen_log_errors = False
+        self._update_log_button()
+
+    def _clear_job_log(self) -> None:
+        self.job_log.clear()
+        self.log_view.set_entries([])
+        self._unseen_log_entries = 0
+        self._unseen_log_errors = False
+        self._update_log_button()
+
+    def _update_log_button(self) -> None:
+        if self._unseen_log_entries and not self.log_view.isVisible():
+            text = f"Log ({self._unseen_log_entries})"
+        else:
+            text = "Log"
+        has_errors = self._unseen_log_errors and not self.log_view.isVisible()
+        active_index = self.context.state.layout.active_pane_index
+        for index, pane_view in enumerate(self.pane_views):
+            pane_view.set_log_button_state(text, has_errors, visible=index == active_index)
 
     def _connect_terminal_signals(self, dock) -> None:
         dock.maximize_requested.connect(self._toggle_terminal_maximized)
@@ -586,6 +632,7 @@ class MainWindow(QMainWindow):
             new_active.focus_list()
         self._sync_terminal_to_pane_directory(new_active, new_active.current_directory())
         self._sync_quick_view(new_active)
+        self._update_log_button()
 
     def _sync_terminal_to_pane_directory(self, pane_view: PaneView, path: Path) -> None:
         if pane_view is not self._active_pane():
@@ -1919,42 +1966,8 @@ class MainWindow(QMainWindow):
             self._clipboard_operation = None
             self._update_clipboard_chip()
 
-        if result.cancelled:
-            message = (
-                f"Processed {result.processed_actions} item(s) and completed "
-                f"{result.completed_actions} successfully before cancellation."
-            )
-            if result.errors:
-                details = "\n".join(result.errors[:8])
-                if len(result.errors) > 8:
-                    details += f"\n... and {len(result.errors) - 8} more"
-                show_message(
-                    parent=self,
-                    title=f"{success_title} Cancelled With Errors",
-                    message=message,
-                    details=details,
-                    level="warning",
-                    accept_label="Close",
-                )
-                return
-
-            show_message(
-                parent=self,
-                title=f"{success_title} Cancelled",
-                message=message,
-                level="info",
-                accept_label="Close",
-            )
-            return
-
-        if result.errors:
-            message = "\n".join(result.errors[:8])
-            if len(result.errors) > 8:
-                message += f"\n... and {len(result.errors) - 8} more"
-            self._show_error(
-                f"{success_title} completed with errors",
-                message,
-            )
+        # Outcomes are recorded in the Log; the progress dialog closes itself
+        # on clean finishes and stays open only when there are errors.
         
 
     def _update_clipboard_chip(self) -> None:

@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 
 from multipane_commander.services.fs.local_fs import OperationCancelled
 from multipane_commander.services.jobs.transfer import TransferExecutor
-from multipane_commander.services.jobs.model import FileJobAction, FileJobResult, FileJobSnapshot
+from multipane_commander.services.jobs.model import (
+    FileJobAction,
+    FileJobResult,
+    FileJobSnapshot,
+    JobLogEntry,
+)
 from multipane_commander.ui.dialog_keys import install_dialog_key_bindings
 
 
@@ -79,6 +84,7 @@ class _JobEventBridge(QObject):
 class JobManager(QObject):
     job_changed = Signal(object)
     job_removed = Signal(str)
+    job_logged = Signal(object)
     idle = Signal()
 
     def cancel_all(self) -> None:
@@ -175,6 +181,16 @@ class JobManager(QObject):
 
             progress.finish(current_snapshot)
             self.job_changed.emit(replace(current_snapshot))
+            self.job_logged.emit(
+                JobLogEntry(
+                    operation=actions[0].operation if actions else "",
+                    title=current_snapshot.title,
+                    status=current_snapshot.status,
+                    completed_actions=current_snapshot.completed_actions,
+                    total_actions=current_snapshot.total_actions,
+                    errors=list(result.errors),
+                )
+            )
             thread.quit()
             on_finished(result)
 
@@ -237,6 +253,10 @@ class _JobProgressDialog(QDialog):
         self.label.setObjectName("dialogSectionLabel")
         self.transfer_label = QLabel()
         self.transfer_label.setWordWrap(True)
+        self.details_label = QLabel()
+        self.details_label.setObjectName("dialogHint")
+        self.details_label.setWordWrap(True)
+        self.details_label.setVisible(False)
         self.byte_progress = QProgressBar()
         self.byte_progress.hide()
         self.progress_bar = QProgressBar()
@@ -259,6 +279,7 @@ class _JobProgressDialog(QDialog):
         card_layout.addWidget(self.progress_bar)
         card_layout.addWidget(self.transfer_label)
         card_layout.addWidget(self.byte_progress)
+        card_layout.addWidget(self.details_label)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -306,8 +327,19 @@ class _JobProgressDialog(QDialog):
         self.cancel_button.setAutoDefault(True)
         self.cancel_button.clicked.disconnect()
         self.cancel_button.clicked.connect(self._dismiss)
-        if not self.isVisible() and snapshot.status == "completed_with_errors":
-            self.show()
+        needs_attention = bool(snapshot.errors) or snapshot.status == "completed_with_errors"
+        if needs_attention:
+            if snapshot.errors:
+                details = "\n".join(snapshot.errors[:8])
+                if len(snapshot.errors) > 8:
+                    details += f"\n... and {len(snapshot.errors) - 8} more"
+                self.details_label.setText(details)
+                self.details_label.setVisible(True)
+            if not self.isVisible():
+                self.show()
+            return
+        # Clean finishes close themselves; the result is kept in the Log.
+        self._dismiss()
 
     def _activate_default_button(self) -> None:
         if self.background_button.isVisible():

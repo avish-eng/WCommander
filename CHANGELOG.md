@@ -5,6 +5,8 @@
 
 - Isolate the Windows build's DLL search path to prevent unrelated tool runtimes from supplying incompatible Qt dependencies.
 
+- Close finished transfer popups automatically instead of waiting for an OK/Close click: clean finishes (success or cancel) dismiss themselves, while failures keep the window open and now show the error details inline. Add a session **Log** (button beside Folders / Thumbnails in the active pane's header) that records every finished operation with time, operation, status, counts and errors; the button carries an unread count and an error badge, and the view has a Clear Log action.
+
 - Match QtWebEngine's device scale factor to the monitor Qt composites on (`--force-device-scale-factor`). QtWebEngine could report a system-wide 120% while Qt used the per-monitor DPR (100%/150%), so the whole web view was resampled when composited — softening text and dropping single-pixel glyph features such as the top of `03:10`. The startup screen under the cursor decides the factor, an explicit user override is respected, and the terminal tooltip now reports `render scale: page X / widget Y` for diagnosis.
 
 - Add **⋯ → Save terminal image…** to capture the terminal at native pixels to `Desktop\terminal-snapshot.png` (useful for sharing exactly what the renderer produced instead of a rescaled screenshot).

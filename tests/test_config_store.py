@@ -151,6 +151,28 @@ def test_config_store_defaults_terminal_font_to_consolas_14(tmp_path, monkeypatc
     assert loaded.terminal.font_size == 14
 
 
+def test_config_store_sanitizes_terminal_font_size(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config_path = tmp_path / "MultiPaneCommander" / "config.json"
+    config_path.parent.mkdir()
+
+    for payload, expected in [
+        (None, 14),
+        (999, 14),
+        (2, 14),
+        (True, 14),
+        ("large", 14),
+        (15, 15),
+    ]:
+        config_path.write_text(
+            json.dumps({"terminal": {"font_size": payload}}),
+            encoding="utf-8",
+        )
+
+        assert load_config().terminal.font_size == expected
+
+
 def test_config_store_prefers_explicit_prefer_pty_over_legacy_experimental_pty(
     tmp_path, monkeypatch
 ) -> None:

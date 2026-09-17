@@ -72,7 +72,7 @@ class TerminalDock(TerminalCommands, QFrame):
         )
         self._gpu_renderer = gpu_renderer
         self._font_family = font_family.strip()
-        self._base_font_size = max(6, min(40, int(font_size)))
+        self._base_font_size = max(6, min(40, int(font_size or 14)))
         self._font_size = self._base_font_size
         self._recent_commands = self._unique_commands(recent_commands or [])
         self._bookmarked_commands = self._unique_commands(bookmarked_commands or [])

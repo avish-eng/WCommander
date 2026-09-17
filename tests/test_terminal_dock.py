@@ -362,6 +362,21 @@ def test_terminal_history_caps_at_one_hundred_rows_keeping_pinned_and_newest(
     assert rows[:4] == ["cls", "dir", "cmd 0", "brand new"]
 
 
+def test_terminal_dock_survives_missing_font_size(monkeypatch, tmp_path):
+    _qapp()
+    session = FakeSession()
+    monkeypatch.setattr(TerminalDock, "_build_session", lambda _self, _path: session)
+
+    dock = TerminalDock(
+        initial_directory=tmp_path,
+        visible=False,
+        follow_active_pane=True,
+        font_size=None,
+    )
+
+    assert dock._base_font_size == 14
+
+
 def test_terminal_dock_records_typed_commands_only_when_draft_started_at_prompt(monkeypatch, tmp_path):
     _qapp()
     session = FakeSession()
